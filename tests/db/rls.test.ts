@@ -274,6 +274,17 @@ describe("admin", () => {
     expect(m.rows[0].m).toHaveProperty("contributors");
   });
 
+  it("admin can delete a post, and company aggregates follow; non-admin cannot", async () => {
+    const id = await superInsertApproved({ role: "To Delete", rating: 2, user_id: ids.admin });
+    const co = () => q("select review_count from public.companies where id = $1", [company]);
+    const before = (await co()).rows[0].review_count as number;
+    await as("carol", () => q("delete from public.submissions where id = $1", [id]));
+    expect((await q("select id from public.submissions where id = $1", [id])).rows).toHaveLength(1);
+    await as("admin", () => q("delete from public.submissions where id = $1", [id]));
+    expect((await q("select id from public.submissions where id = $1", [id])).rows).toHaveLength(0);
+    expect((await co()).rows[0].review_count).toBe(before - 1);
+  });
+
   it("an email that only looks like the admin's is not admin", async () => {
     emails.bob = "shyjutalks@gmail.com.evil.com";
     await expect(as("bob", () => q("select public.moderate_submission($1, 'approved')", [pendingId]))).rejects.toThrow(/admin only/);

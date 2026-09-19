@@ -21,3 +21,13 @@ export async function verifyCompany(formData: FormData) {
   await supabase.from("companies").update({ verified: true }).eq("id", id);
   revalidatePath("/admin");
 }
+
+// Admin-only in the database: the submissions DELETE policy requires is_admin(),
+// so for anyone else this deletes zero rows.
+export async function deleteSubmission(formData: FormData) {
+  const id = String(formData.get("id") ?? "");
+  if (!id) return;
+  const supabase = await createClient();
+  await supabase.from("submissions").delete().eq("id", id);
+  revalidatePath("/admin");
+}

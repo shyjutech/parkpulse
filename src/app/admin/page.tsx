@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
 import { getViewer } from "@/lib/session";
 import { createClient } from "@/lib/supabase/server";
-import { moderate, verifyCompany } from "./actions";
+import ConfirmButton from "@/components/ConfirmButton";
+import { deleteSubmission, moderate, verifyCompany } from "./actions";
 
 export const metadata = { title: "Admin" };
 
@@ -22,6 +23,14 @@ interface Pending {
   companies: { id: string; name: string; park: string; verified: boolean } | null;
 }
 
+interface Reviewed {
+  id: string;
+  role: string;
+  status: string;
+  submitted_at: string;
+  companies: { name: string } | null;
+}
+
 interface Metrics {
   authenticated_users: number;
   contributors: number;
@@ -39,7 +48,7 @@ export default async function AdminPage() {
   if (!viewer.isAdmin) notFound();
 
   const supabase = await createClient();
-  const [pendingRes, metricsRes] = await Promise.all([
+  const [pendingRes, metricsRes, reviewedRes] = await Promise.all([
     supabase
       .from("submissions")
       .select(
@@ -49,7 +58,14 @@ export default async function AdminPage() {
       .order("submitted_at")
       .limit(50),
     supabase.rpc("phase1_metrics"),
+    supabase
+      .from("submissions")
+      .select("id, role, status, submitted_at, companies(name)")
+      .in("status", ["approved", "rejected"])
+      .order("submitted_at", { ascending: false })
+      .limit(30),
   ]);
+  const reviewed = (reviewedRes.data ?? []) as unknown as Reviewed[];
   const pending = (pendingRes.data ?? []) as unknown as Pending[];
   const m = metricsRes.data as Metrics | null;
 
@@ -111,9 +127,38 @@ export default async function AdminPage() {
               <button name="decision" value="approved" className={`${btn} bg-brand-700 text-white hover:bg-brand-800`}>Approve</button>
               <button name="decision" value="rejected" className={`${btn} border border-stone-300 hover:border-red-600 hover:text-red-700`}>Reject</button>
             </form>
+            <form action={deleteSubmission} className="mt-2">
+              <input type="hidden" name="id" value={p.id} />
+              <ConfirmButton confirmMessage="Permanently delete this submission? This cannot be undone." className="text-xs text-red-700 underline">
+                Delete permanently
+              </ConfirmButton>
+            </form>
           </article>
         ))}
       </div>
+
+      <h2 className="mt-10 text-lg font-semibold">Recently reviewed</h2>
+      {reviewed.length === 0 ? (
+        <p className="mt-3 text-stone-600">No approved or rejected submissions yet.</p>
+      ) : (
+        <ul className="mt-3 divide-y divide-stone-200 rounded-lg border border-stone-200 bg-white">
+          {reviewed.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
+              <span>
+                <span className="font-medium">{r.companies?.name}</span> · {r.role} ·{" "}
+                <span className={r.status === "approved" ? "text-brand-700" : "text-stone-500"}>{r.status}</span> ·{" "}
+                {new Date(r.submitted_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+              </span>
+              <form action={deleteSubmission}>
+                <input type="hidden" name="id" value={r.id} />
+                <ConfirmButton confirmMessage="Permanently delete this submission? This cannot be undone." className="min-h-11 rounded-md border border-stone-300 px-3 text-xs text-red-700 hover:border-red-600">
+                  Delete
+                </ConfirmButton>
+              </form>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
