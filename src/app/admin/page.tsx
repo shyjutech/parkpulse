@@ -48,7 +48,7 @@ export default async function AdminPage() {
   if (!viewer.isAdmin) notFound();
 
   const supabase = await createClient();
-  const [pendingRes, metricsRes, reviewedRes] = await Promise.all([
+  const [pendingRes, metricsRes, reviewedRes, unverifiedRes] = await Promise.all([
     supabase
       .from("submissions")
       .select(
@@ -64,7 +64,14 @@ export default async function AdminPage() {
       .in("status", ["approved", "rejected"])
       .order("submitted_at", { ascending: false })
       .limit(30),
+    supabase
+      .from("companies")
+      .select("id, name, park, review_count")
+      .eq("verified", false)
+      .order("name")
+      .limit(100),
   ]);
+  const unverified = (unverifiedRes.data ?? []) as { id: string; name: string; park: string; review_count: number }[];
   const reviewed = (reviewedRes.data ?? []) as unknown as Reviewed[];
   const pending = (pendingRes.data ?? []) as unknown as Pending[];
   const m = metricsRes.data as Metrics | null;
@@ -136,6 +143,25 @@ export default async function AdminPage() {
           </article>
         ))}
       </div>
+
+      <h2 className="mt-10 text-lg font-semibold">Unverified companies ({unverified.length})</h2>
+      {unverified.length === 0 ? (
+        <p className="mt-3 text-stone-600">All companies are verified.</p>
+      ) : (
+        <ul className="mt-3 divide-y divide-stone-200 rounded-lg border border-stone-200 bg-white">
+          {unverified.map((c) => (
+            <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
+              <span>
+                <span className="font-medium">{c.name}</span> · {c.park} · {c.review_count} approved
+              </span>
+              <form action={verifyCompany}>
+                <input type="hidden" name="id" value={c.id} />
+                <button className="min-h-11 rounded-md bg-brand-700 px-3 text-xs font-medium text-white hover:bg-brand-800">Verify</button>
+              </form>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <h2 className="mt-10 text-lg font-semibold">Recently reviewed</h2>
       {reviewed.length === 0 ? (
