@@ -2,7 +2,7 @@
 
 import { logEvent } from "@/lib/events";
 import { createClient } from "@/lib/supabase/server";
-import { validateSubmission, type FieldErrors, type SubmissionInput } from "@/lib/validation";
+import { monthToDate, validateSubmission, type FieldErrors, type SubmissionInput } from "@/lib/validation";
 
 export type SubmitResult =
   | { ok: true }
@@ -37,22 +37,20 @@ export async function submitExperience(input: SubmissionInput): Promise<SubmitRe
     company_id: companyId,
     role: input.role.trim(),
     experience_level: input.experience_level,
-    interview_date: input.interview_date || null,
-    rounds: input.rounds.trim(),
+    interview_date: monthToDate(input.interview_date),
     questions: input.questions.trim(),
-    difficulty: input.difficulty,
-    outcome: input.outcome,
-    salary_type: input.salary_type,
-    salary_bucket: input.salary_type === "Not disclosed" ? null : input.salary_bucket,
-    rating: Number(input.rating),
-    culture_notes: input.culture_notes.trim(),
+    rounds: input.rounds.trim() || null,
+    difficulty: input.difficulty || null,
+    outcome: input.outcome || null,
+    salary_type: input.salary_type || null,
+    salary_bucket: input.salary_type && input.salary_type !== "Not disclosed" ? input.salary_bucket : null,
+    rating: input.rating ? Number(input.rating) : null,
+    culture_notes: input.culture_notes.trim() || null,
   });
   if (error) {
     return { ok: false, message: error.code === "23503" ? "That company no longer exists. Please pick it again." : FRIENDLY };
   }
 
   await logEvent("submit_completed", companyId);
-  const { data: profile } = await supabase.from("profiles").select("contribution_count").maybeSingle();
-  if (profile?.contribution_count === 1) await logEvent("unlock_completed", companyId);
   return { ok: true };
 }

@@ -17,12 +17,12 @@ export default async function Header() {
           ParkPulse
         </Link>
         <nav className="flex flex-wrap items-center justify-end gap-x-1" aria-label="Main">
+          <Link href="/experiences" className={link}>Experiences</Link>
           <Link href="/companies" className={link}>Companies</Link>
-          <Link href="/search" className={link}>Search</Link>
           <Link href="/submit" className={link}>Share</Link>
           {viewer.userId ? (
             <>
-              <Link href="/dashboard" className={link}>My contributions</Link>
+              <Link href="/dashboard" className={link}>My space</Link>
               {viewer.isAdmin && <Link href="/admin" className={link}>Admin</Link>}
               <form action="/auth/signout" method="post">
                 <button className={link}>Sign out</button>

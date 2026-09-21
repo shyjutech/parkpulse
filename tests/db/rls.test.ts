@@ -47,6 +47,7 @@ const submission = (over: Record<string, unknown> = {}) => ({
   company_id: company,
   role: "Flutter Developer",
   experience_level: "3–5 years",
+  interview_date: "2026-03-01",
   rounds: "Three rounds: online screen, technical, HR discussion.",
   questions: "Explain widget lifecycle, state management options, and isolates in Dart.",
   difficulty: "Medium",
@@ -82,12 +83,10 @@ async function superInsertApproved(over: Record<string, unknown> = {}) {
 beforeAll(async () => {
   db = new PGlite({ extensions: { pg_trgm } });
   await db.exec(fs.readFileSync(path.join(__dirname, "stub_supabase.sql"), "utf8"));
-  await db.exec(
-    fs.readFileSync(
-      path.join(__dirname, "../../supabase/migrations/20260919000000_phase1_init.sql"),
-      "utf8",
-    ),
-  );
+  const dir = path.join(__dirname, "../../supabase/migrations");
+  for (const f of fs.readdirSync(dir).sort()) {
+    await db.exec(fs.readFileSync(path.join(dir, f), "utf8"));
+  }
   for (const k of Object.keys(ids) as (keyof typeof ids)[]) {
     await q("insert into auth.users (id, email, raw_user_meta_data) values ($1, $2, $3)", [
       ids[k],
@@ -108,9 +107,10 @@ describe("authentication", () => {
     await expect(insertSubmission("anon")).rejects.toThrow(/permission denied/i);
   });
 
-  it("signed-out users cannot read submissions or profiles", async () => {
-    await expect(as("anon", () => q("select id from public.submissions"))).rejects.toThrow(/permission denied/i);
+  it("signed-out users cannot read profiles or others' pending submissions", async () => {
     await expect(as("anon", () => q("select id from public.profiles"))).rejects.toThrow(/permission denied/i);
+    const r = await as("anon", () => q("select id from public.submissions"));
+    expect(r.rows).toHaveLength(0);
   });
 
   it("signed-in users can submit, and the new row is pending", async () => {
@@ -120,9 +120,7 @@ describe("authentication", () => {
   });
 });
 
-describe("contribution gate", () => {
-  let carolRowSeen: number;
-
+describe("open browsing", () => {
   it("a contribution flips has_contributed and bumps the count (via trigger)", async () => {
     const before = await as("carol", () => q("select has_contributed, contribution_count from public.profiles"));
     expect(before.rows).toEqual([{ has_contributed: false, contribution_count: 0 }]);
@@ -131,39 +129,76 @@ describe("contribution gate", () => {
     expect(after.rows).toEqual([{ has_contributed: true, contribution_count: 1 }]);
   });
 
-  it("locked user sees no approved rows, no search hits, no breakdown", async () => {
+  it("signed-out visitors can read approved reports but never pending ones", async () => {
     await superInsertApproved({ role: "Data Engineer", user_id: ids.admin });
-    // Fresh locked user (dave) — bob already contributed in the previous suite.
+    const rows = await as("anon", () => q("select role, status from public.submissions"));
+    expect(rows.rows).toEqual([{ role: "Data Engineer", status: "approved" }]);
+  });
+
+  it("signed-out visitors cannot read authors", async () => {
+    await expect(as("anon", () => q("select user_id from public.submissions"))).rejects.toThrow(/permission denied/i);
+  });
+
+  it("a user who never contributed sees the same approved data", async () => {
     const dave = "00000000-0000-0000-0000-00000000000d";
     await q("insert into auth.users (id, email) values ($1, 'dave@example.com')", [dave]);
     ids["dave" as keyof typeof ids] = dave;
     emails.dave = "dave@example.com";
-    const rows = await as("dave" as Actor, () => q("select id from public.submissions"));
-    expect(rows.rows).toHaveLength(0);
-    const search = await as("dave" as Actor, () => q("select * from public.search_submissions('flutter')"));
-    expect(search.rows).toHaveLength(0);
-    const breakdown = await as("dave" as Actor, () => q("select public.company_breakdown($1) as b", [company]));
-    expect(breakdown.rows[0].b).toBeNull();
+    const rows = await as("dave" as Actor, () => q("select role from public.submissions"));
+    expect(rows.rows.map((r) => r.role)).toEqual(["Data Engineer"]);
   });
 
-  it("contributor sees approved rows from others, but not others' pending", async () => {
-    const rows = await as("carol", () => q("select role, status from public.submissions order by role"));
-    carolRowSeen = rows.rows.length;
-    const statuses = new Set(rows.rows.map((r) => r.status));
-    // carol's own pending + approved from others; never alice's/bob's pending
-    expect(rows.rows.filter((r) => r.role === "QA Engineer")).toHaveLength(0);
-    expect(rows.rows.filter((r) => r.role === "Data Engineer")).toHaveLength(1);
-    expect(statuses.has("approved")).toBe(true);
-    expect(carolRowSeen).toBeGreaterThan(0);
+  it("browse_experiences works for anon and only returns approved rows", async () => {
+    const all = await as("anon", () => q("select role, total_count from public.browse_experiences()"));
+    expect(all.rows.map((r) => r.role)).toEqual(["Data Engineer"]);
+    expect(Number(all.rows[0].total_count)).toBe(1);
+    const hit = await as("anon", () => q("select role from public.browse_experiences('data engineer')"));
+    expect(hit.rows).toHaveLength(1);
+    const miss = await as("anon", () => q("select role from public.browse_experiences('backend')"));
+    expect(miss.rows).toHaveLength(0); // carol's backend row is still pending
   });
 
-  it("search and breakdown work for contributors and return approved data only", async () => {
-    const search = await as("carol", () => q("select role from public.search_submissions('data engineer')"));
-    expect(search.rows.map((r) => r.role)).toEqual(["Data Engineer"]);
-    const none = await as("carol", () => q("select role from public.search_submissions('backend')"));
-    expect(none.rows).toHaveLength(0); // carol's own pending row is not searchable
-    const b = await as("carol", () => q("select public.company_breakdown($1) as b", [company]));
+  it("browse_experiences filters by park, role, level, company and recency", async () => {
+    const f = (args: string) => as("anon", () => q(`select role from public.browse_experiences(${args})`));
+    expect((await f("p_park => 'Infopark'")).rows).toHaveLength(1);
+    expect((await f("p_park => 'Cyberpark'")).rows).toHaveLength(0);
+    expect((await f("p_role => 'data'")).rows).toHaveLength(1);
+    expect((await f("p_role => 'nurse'")).rows).toHaveLength(0);
+    expect((await f("p_level => '3–5 years'")).rows).toHaveLength(1);
+    expect((await f("p_level => 'Fresher'")).rows).toHaveLength(0);
+    expect((await f("p_company => 'acme'")).rows).toHaveLength(1);
+    expect((await f("p_company => '%'")).rows).toHaveLength(0); // wildcards are escaped
+    expect((await f("p_since => '2026-01-01'")).rows).toHaveLength(1);
+    expect((await f("p_since => '2030-01-01'")).rows).toHaveLength(0);
+  });
+
+  it("company_breakdown is public, counts approved rows only, and never errors on optional fields", async () => {
+    const b = await as("anon", () => q("select public.company_breakdown($1) as b", [company]));
     expect(b.rows[0].b).toMatchObject({ total: 1, salary: { "₹8L–₹12L": 1 }, difficulty: { Medium: 1 } });
+    await superInsertApproved({ role: "Minimal", salary_type: null, salary_bucket: null, difficulty: null, outcome: null, rating: null, rounds: null, culture_notes: null });
+    const again = await as("anon", () => q("select public.company_breakdown($1) as b", [company]));
+    expect(again.rows[0].b).toMatchObject({ total: 2, difficulty: { Medium: 1 } });
+    await q("delete from public.submissions where role = 'Minimal'");
+  });
+});
+
+describe("simplified contributions", () => {
+  const minimal = { rounds: null, difficulty: null, outcome: null, salary_type: null, salary_bucket: null, rating: null, culture_notes: null, questions: "System design and DSA" };
+
+  it("accepts a submission with only the required fields", async () => {
+    await insertSubmission("bob", { ...minimal, user_id: ids.bob, role: "Minimal Bob" });
+    const r = await as("bob", () => q("select status from public.submissions where role = 'Minimal Bob'"));
+    expect(r.rows).toEqual([{ status: "pending" }]);
+  });
+
+  it("requires an interview month on new rows", async () => {
+    await expect(insertSubmission("bob", { ...minimal, user_id: ids.bob, interview_date: null })).rejects.toThrow(/row-level security/i);
+  });
+
+  it("still rejects a too-short topic and inconsistent salary", async () => {
+    await expect(insertSubmission("bob", { ...minimal, user_id: ids.bob, questions: "short" })).rejects.toThrow(/check constraint/i);
+    await expect(insertSubmission("bob", { ...minimal, user_id: ids.bob, salary_type: "Offered CTC" })).rejects.toThrow(/check constraint/i);
+    await expect(insertSubmission("bob", { ...minimal, user_id: ids.bob, salary_bucket: "₹8L–₹12L" })).rejects.toThrow(/check constraint/i);
   });
 });
 
@@ -219,7 +254,7 @@ describe("privacy", () => {
   });
 
   it("search results expose no identity fields", async () => {
-    const r = await as("alice", () => q("select * from public.search_submissions('data engineer')"));
+    const r = await as("alice", () => q("select * from public.browse_experiences('data engineer')"));
     expect(r.rows.length).toBeGreaterThan(0);
     const keys = Object.keys(r.rows[0]);
     for (const forbidden of ["user_id", "email", "display_name", "avatar_url"]) {
@@ -339,5 +374,106 @@ describe("events", () => {
     await expect(
       as("bob", () => q("insert into public.events (name, user_id) values ('company_view', $1)", [ids.alice])),
     ).rejects.toThrow();
+  });
+});
+
+describe("follows, saves and preparation checklists", () => {
+  let approvedId: string;
+  beforeAll(async () => {
+    approvedId = (await q("select id from public.submissions where role = 'Data Engineer'")).rows[0].id as string;
+  });
+
+  it("follows are private and own-row only", async () => {
+    await as("bob", () => q("insert into public.company_follows (user_id, company_id) values ($1, $2)", [ids.bob, company]));
+    await expect(as("bob", () => q("insert into public.company_follows (user_id, company_id) values ($1, $2)", [ids.alice, company]))).rejects.toThrow(/row-level security/i);
+    expect((await as("alice", () => q("select * from public.company_follows"))).rows).toHaveLength(0);
+    await expect(as("anon", () => q("select * from public.company_follows"))).rejects.toThrow(/permission denied/i);
+  });
+
+  it("saving works for approved reports only, and is private", async () => {
+    await as("bob", () => q("insert into public.saved_experiences (user_id, submission_id) values ($1, $2)", [ids.bob, approvedId]));
+    const pendingId = (await q("select id from public.submissions where role = 'QA Engineer'")).rows[0].id as string;
+    await expect(as("bob", () => q("insert into public.saved_experiences (user_id, submission_id) values ($1, $2)", [ids.bob, pendingId]))).rejects.toThrow(/row-level security/i);
+    expect((await as("alice", () => q("select * from public.saved_experiences"))).rows).toHaveLength(0);
+    expect((await as("bob", () => q("select * from public.saved_experiences"))).rows).toHaveLength(1);
+  });
+
+  it("followed companies report new approved experiences since last seen", async () => {
+    await q("update public.company_follows set last_seen_at = now() - interval '1 day' where user_id = $1", [ids.bob]);
+    await q("update public.submissions set moderated_at = now() where id = $1", [approvedId]);
+    const feed = await as("bob", () => q("select role from public.my_new_experiences()"));
+    expect(feed.rows.map((r) => r.role)).toContain("Data Engineer");
+    const companies = await as("bob", () => q("select new_count from public.my_followed_companies()"));
+    expect(Number(companies.rows[0].new_count)).toBeGreaterThanOrEqual(1);
+    await as("bob", () => q("update public.company_follows set last_seen_at = now()"));
+    const after = await as("bob", () => q("select role from public.my_new_experiences()"));
+    expect(after.rows).toHaveLength(0);
+    expect((await as("alice", () => q("select * from public.my_new_experiences()"))).rows).toHaveLength(0);
+  });
+
+  it("prep plans and checklist items are private; users cannot add items to someone else's plan", async () => {
+    const plan = await as("bob", () => q("insert into public.prep_plans (user_id, company_id, interview_date) values ($1, $2, '2026-01-01') returning id", [ids.bob, company]));
+    const planId = plan.rows[0].id as string;
+    await as("bob", () => q("insert into public.prep_items (plan_id, user_id, text) values ($1, $2, 'Revise DSA')", [planId, ids.bob]));
+    await expect(as("alice", () => q("insert into public.prep_items (plan_id, user_id, text) values ($1, $2, 'sneaky')", [planId, ids.alice]))).rejects.toThrow(/row-level security/i);
+    expect((await as("alice", () => q("select * from public.prep_items"))).rows).toHaveLength(0);
+    expect((await as("alice", () => q("select * from public.prep_plans"))).rows).toHaveLength(0);
+    await as("bob", () => q("update public.prep_items set done = true"));
+    await expect(as("bob", () => q("update public.prep_plans set user_id = $1", [ids.alice]))).rejects.toThrow(/permission denied/i);
+  });
+
+  it("interview-date reminders appear only for past dates, until dismissed or contributed", async () => {
+    const dave = "dave" as Actor; // has never contributed
+    const daveId = ids["dave" as keyof typeof ids];
+    await as(dave, () => q("insert into public.prep_plans (user_id, company_id, interview_date) values ($1, $2, current_date - 3)", [daveId, company]));
+    expect((await as(dave, () => q("select company_name from public.my_reminders()"))).rows).toEqual([{ company_name: "Acme Labs" }]);
+    // Bob already contributed for this company, so he gets no nudge for his own (past-dated) plan.
+    expect((await as("bob", () => q("select * from public.my_reminders()"))).rows).toHaveLength(0);
+    // Dismissing hides it.
+    await as(dave, () => q("update public.prep_plans set reminder_dismissed = true"));
+    expect((await as(dave, () => q("select * from public.my_reminders()"))).rows).toHaveLength(0);
+    // A future interview date never nudges.
+    await as(dave, () => q("update public.prep_plans set reminder_dismissed = false, interview_date = current_date + 5"));
+    expect((await as(dave, () => q("select * from public.my_reminders()"))).rows).toHaveLength(0);
+    // Contributing also ends the nudge.
+    await as(dave, () => q("update public.prep_plans set interview_date = current_date - 1"));
+    expect((await as(dave, () => q("select * from public.my_reminders()"))).rows).toHaveLength(1);
+    await insertSubmission(dave, { user_id: daveId, role: "Dave Role" });
+    expect((await as(dave, () => q("select * from public.my_reminders()"))).rows).toHaveLength(0);
+  });
+});
+
+describe("company requests (demand capture)", () => {
+  it("anonymous and signed-in requests are counted once each and hidden from non-admins", async () => {
+    await as("anon", () => q("select public.request_company_experiences($1, 'browser-1')", [company]));
+    await as("anon", () => q("select public.request_company_experiences($1, 'browser-1')", [company]));
+    await as("anon", () => q("select public.request_company_experiences($1, 'browser-2')", [company]));
+    await as("bob", () => q("select public.request_company_experiences($1)", [company]));
+    await as("bob", () => q("select public.request_company_experiences($1)", [company]));
+    await expect(as("anon", () => q("select public.request_company_experiences($1)", [company]))).rejects.toThrow(/missing requester/);
+    const has = await as("anon", () => q("select public.has_requested($1, 'browser-1') as h", [company]));
+    expect(has.rows[0].h).toBe(true);
+    await expect(as("anon", () => q("select * from public.company_requests"))).rejects.toThrow(/permission denied/i);
+    await expect(as("bob", () => q("select * from public.requested_companies()"))).rejects.toThrow(/admin only/);
+    const admin = await as("admin", () => q("select name, request_count from public.requested_companies()"));
+    expect(admin.rows).toEqual([{ name: "Acme Labs", request_count: 3 }]);
+  });
+});
+
+describe("growth metrics", () => {
+  it("counts visits, return visits and UTM sources; admin only", async () => {
+    await as("anon", () => q("insert into public.events (name, anon_id, utm_source, utm_medium, utm_campaign) values ('visit','v1','instagram','bio','first50')"));
+    await q("insert into public.events (name, anon_id, created_at) values ('visit','v1', now() - interval '2 days')");
+    await as("anon", () => q("insert into public.events (name, anon_id) values ('submit_started','v1')"));
+    await as("anon", () => q("insert into public.events (name, anon_id, utm_source) values ('save_added','v1','instagram')"));
+    await expect(as("bob", () => q("select public.growth_metrics()"))).rejects.toThrow(/admin only/);
+    const m = (await as("admin", () => q("select public.growth_metrics() as m"))).rows[0].m as Record<string, unknown>;
+    expect(m).toMatchObject({ return_visitors: 1, form_starts: 1, saves: 1, requests: 3 });
+    expect(JSON.stringify(m.by_source)).toContain("instagram");
+  });
+
+  it("public_stats returns counts only", async () => {
+    const r = await as("anon", () => q("select public.public_stats() as s"));
+    expect(Object.keys(r.rows[0].s as object).sort()).toEqual(["approved_reports", "companies_with_reports"]);
   });
 });

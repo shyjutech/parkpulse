@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Header from "@/components/Header";
+import VisitTracker from "@/components/VisitTracker";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
@@ -20,9 +21,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col">
         <Header />
+        <VisitTracker />
         <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 sm:px-6">{children}</main>
         <footer className="border-t border-stone-200 py-6 text-center text-xs text-stone-500">
-          ParkPulse · Anonymous, user-contributed and moderated. Experiences are individual opinions, not verified facts.
+          ParkPulse · Anonymous, user-contributed and reviewed by moderators. Reviewed does not mean verified: experiences are individual accounts.{" "}
+          <a href="/privacy" className="underline">Privacy</a>
         </footer>
       </body>
     </html>

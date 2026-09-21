@@ -56,6 +56,8 @@ export function detectSpam(text: string, minDistinctWords: number): string | nul
 // ---------------------------------------------------------------------------
 // Submission validation (used by the form for instant feedback and, as the
 // authoritative check, by the server action).
+// Required: company, role, experience band, interview month, and one
+// question/topic/short description. Everything else is optional.
 // ---------------------------------------------------------------------------
 
 export interface SubmissionInput {
@@ -64,9 +66,11 @@ export interface SubmissionInput {
   new_company_park: string;
   role: string;
   experience_level: string;
+  /** Interview month as "YYYY-MM" (from <input type="month">). */
   interview_date: string;
-  rounds: string;
+  /** The one required free-text field: a question, topic or short description. */
   questions: string;
+  rounds: string;
   difficulty: string;
   outcome: string;
   salary_type: string;
@@ -83,6 +87,39 @@ const oneOf = (list: readonly string[], v: string) => list.includes(v);
 function piiMessage(kinds: PiiKind[]): string {
   const labels = { email: "an email address", phone: "a phone number", url: "a link or website" };
   return `This looks like it contains ${kinds.map((k) => labels[k]).join(" and ")}. Please remove it before submitting.`;
+}
+
+const MONTH = /^(\d{4})-(0[1-9]|1[0-2])$/;
+
+/** "YYYY-MM" -> "YYYY-MM-01" for the date column; null when empty. */
+export function monthToDate(month: string): string | null {
+  return MONTH.test(month) ? `${month}-01` : null;
+}
+
+function checkText(
+  e: FieldErrors,
+  field: "rounds" | "questions" | "culture_notes",
+  value: string,
+  required: boolean,
+  minWords: number,
+) {
+  const v = value.trim();
+  if (!v) {
+    if (required) e[field] = "Add one question, topic or a short description of what happened.";
+    return;
+  }
+  if (v.length < MIN_LENGTHS[field]) {
+    e[field] = `Please write at least ${MIN_LENGTHS[field]} characters (${v.length} so far).`;
+    return;
+  }
+  if (v.length > MAX_LENGTHS[field]) {
+    e[field] = `Please keep this under ${MAX_LENGTHS[field]} characters.`;
+    return;
+  }
+  const pii = detectPii(v);
+  const spam = detectSpam(v, minWords);
+  if (pii.length) e[field] = piiMessage(pii);
+  else if (spam) e[field] = spam;
 }
 
 export function validateSubmission(input: SubmissionInput, today = new Date()): FieldErrors {
@@ -102,39 +139,30 @@ export function validateSubmission(input: SubmissionInput, today = new Date()): 
 
   if (!oneOf(EXPERIENCE_LEVELS, input.experience_level)) e.experience_level = "Choose your experience level.";
 
-  if (input.interview_date) {
-    const d = new Date(input.interview_date);
-    if (Number.isNaN(d.getTime())) e.interview_date = "Enter a valid date.";
-    else if (d.getTime() > today.getTime() + 24 * 3600 * 1000) e.interview_date = "The interview date can't be in the future.";
+  const m = MONTH.exec(input.interview_date);
+  if (!m) e.interview_date = "Choose the month of the interview.";
+  else {
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const cur = today.getUTCFullYear() * 12 + today.getUTCMonth();
+    if (y * 12 + (mo - 1) > cur) e.interview_date = "The interview month can't be in the future.";
+    else if (y < 2010) e.interview_date = "Please enter a more recent interview.";
   }
 
-  const textFields = [
-    ["rounds", 3],
-    ["questions", 5],
-    ["culture_notes", 5],
-  ] as const;
-  for (const [field, minWords] of textFields) {
-    const v = input[field].trim();
-    if (v.length < MIN_LENGTHS[field]) {
-      e[field] = `Please write at least ${MIN_LENGTHS[field]} characters (${v.length} so far).`;
-    } else if (v.length > MAX_LENGTHS[field]) {
-      e[field] = `Please keep this under ${MAX_LENGTHS[field]} characters.`;
-    } else {
-      const pii = detectPii(v);
-      const spam = detectSpam(v, minWords);
-      if (pii.length) e[field] = piiMessage(pii);
-      else if (spam) e[field] = spam;
-    }
+  checkText(e, "questions", input.questions, true, 2);
+  checkText(e, "rounds", input.rounds, false, 3);
+  checkText(e, "culture_notes", input.culture_notes, false, 3);
+
+  // Optional structured answers: only validated when provided.
+  if (input.difficulty && !oneOf(DIFFICULTIES, input.difficulty)) e.difficulty = "Choose how difficult it was.";
+  if (input.outcome && !oneOf(OUTCOMES, input.outcome)) e.outcome = "Choose the outcome.";
+  if (input.salary_type && !oneOf(SALARY_TYPES, input.salary_type)) e.salary_type = "Choose what the salary represents.";
+  else if (input.salary_type && input.salary_type !== "Not disclosed" && !oneOf(SALARY_BUCKETS, input.salary_bucket))
+    e.salary_bucket = "Choose the annual CTC range, or leave the salary blank.";
+  if (input.rating) {
+    const rating = Number(input.rating);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) e.rating = "Choose a rating from 1 to 5.";
   }
-
-  if (!oneOf(DIFFICULTIES, input.difficulty)) e.difficulty = "Choose how difficult it was.";
-  if (!oneOf(OUTCOMES, input.outcome)) e.outcome = "Choose the outcome.";
-  if (!oneOf(SALARY_TYPES, input.salary_type)) e.salary_type = "Choose what the salary represents.";
-  else if (input.salary_type !== "Not disclosed" && !oneOf(SALARY_BUCKETS, input.salary_bucket))
-    e.salary_bucket = "Choose the annual CTC range.";
-
-  const rating = Number(input.rating);
-  if (!Number.isInteger(rating) || rating < 1 || rating > 5) e.rating = "Choose a rating from 1 to 5.";
 
   if (!input.acknowledged) e.acknowledged = "Please confirm before submitting.";
 

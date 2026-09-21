@@ -11,14 +11,14 @@ interface Pending {
   role: string;
   experience_level: string;
   interview_date: string | null;
-  rounds: string;
+  rounds: string | null;
   questions: string;
-  difficulty: string;
-  outcome: string;
-  salary_type: string;
+  difficulty: string | null;
+  outcome: string | null;
+  salary_type: string | null;
   salary_bucket: string | null;
-  rating: number;
-  culture_notes: string;
+  rating: number | null;
+  culture_notes: string | null;
   submitted_at: string;
   companies: { id: string; name: string; park: string; verified: boolean } | null;
 }
@@ -29,6 +29,27 @@ interface Reviewed {
   status: string;
   submitted_at: string;
   companies: { name: string } | null;
+}
+
+interface Growth {
+  visitors: number;
+  return_visitors: number;
+  form_starts: number;
+  submissions: number;
+  saves: number;
+  follows: number;
+  checklists: number;
+  requests: number;
+  by_source: { source: string; visitors: number; submissions: number }[];
+}
+
+interface Requested {
+  company_id: string;
+  name: string;
+  slug: string;
+  park: string;
+  request_count: number;
+  approved_reports: number;
 }
 
 interface Metrics {
@@ -48,7 +69,7 @@ export default async function AdminPage() {
   if (!viewer.isAdmin) notFound();
 
   const supabase = await createClient();
-  const [pendingRes, metricsRes, reviewedRes, unverifiedRes] = await Promise.all([
+  const [pendingRes, metricsRes, reviewedRes, unverifiedRes, growthRes, requestedRes] = await Promise.all([
     supabase
       .from("submissions")
       .select(
@@ -70,7 +91,11 @@ export default async function AdminPage() {
       .eq("verified", false)
       .order("name")
       .limit(100),
+    supabase.rpc("growth_metrics"),
+    supabase.rpc("requested_companies"),
   ]);
+  const growth = growthRes.data as Growth | null;
+  const requested = (requestedRes.data ?? []) as Requested[];
   const unverified = (unverifiedRes.data ?? []) as { id: string; name: string; park: string; review_count: number }[];
   const reviewed = (reviewedRes.data ?? []) as unknown as Reviewed[];
   const pending = (pendingRes.data ?? []) as unknown as Pending[];
@@ -98,6 +123,56 @@ export default async function AdminPage() {
         </dl>
       )}
 
+      {growth && (
+        <section aria-labelledby="growth" className="mt-8">
+          <h2 id="growth" className="text-lg font-semibold">Core journey</h2>
+          <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+            {[
+              ["Visitors", growth.visitors],
+              ["Return visitors", growth.return_visitors],
+              ["Form starts", growth.form_starts],
+              ["Submissions", growth.submissions],
+              ["Saves", growth.saves],
+              ["Follows", growth.follows],
+              ["Checklists", growth.checklists],
+              ["Requests", growth.requests],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="rounded-lg border border-stone-200 bg-white p-3">
+                <dt className="text-stone-500">{label}</dt>
+                <dd className="text-xl font-semibold">{value}</dd>
+              </div>
+            ))}
+          </dl>
+          {growth.by_source.length > 0 && (
+            <table className="mt-4 w-full max-w-md text-left text-sm">
+              <caption className="mb-1 text-left text-xs text-stone-500">By traffic source (UTM)</caption>
+              <thead><tr className="text-stone-500"><th className="py-1 font-medium">Source</th><th className="font-medium">Visitors</th><th className="font-medium">Submissions</th></tr></thead>
+              <tbody>
+                {growth.by_source.map((r) => (
+                  <tr key={r.source} className="border-t border-stone-200"><td className="py-1">{r.source}</td><td>{r.visitors}</td><td>{r.submissions}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
+
+      <section aria-labelledby="requested" className="mt-8">
+        <h2 id="requested" className="text-lg font-semibold">Requested companies</h2>
+        {requested.length === 0 ? (
+          <p className="mt-2 text-sm text-stone-600">No requests yet.</p>
+        ) : (
+          <ul className="mt-3 divide-y divide-stone-200 rounded-lg border border-stone-200 bg-white">
+            {requested.map((r) => (
+              <li key={r.company_id} className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
+                <span><span className="font-medium">{r.name}</span> · {r.park} · {r.approved_reports} approved {r.approved_reports === 1 ? "report" : "reports"}</span>
+                <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-900">{r.request_count} {r.request_count === 1 ? "request" : "requests"}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       <h2 className="mt-8 text-lg font-semibold">Pending submissions ({pending.length})</h2>
       {pendingRes.error && (
         <p role="alert" className="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-800">Couldn&apos;t load the queue.</p>
@@ -110,8 +185,7 @@ export default async function AdminPage() {
               <div>
                 <h3 className="font-semibold">{p.companies?.name} <span className="font-normal text-stone-500">· {p.companies?.park}</span></h3>
                 <p className="text-sm text-stone-600">
-                  {p.role} · {p.experience_level} · {p.difficulty} · {p.outcome} · {p.salary_type}
-                  {p.salary_bucket ? ` ${p.salary_bucket}` : ""} · {p.rating}/5
+                  {[p.role, p.experience_level, p.interview_date?.slice(0, 7), p.difficulty, p.outcome, p.salary_type && `${p.salary_type}${p.salary_bucket ? ` ${p.salary_bucket}` : ""}`, p.rating ? `${p.rating}/5` : null].filter(Boolean).join(" · ")}
                 </p>
               </div>
               {p.companies && !p.companies.verified && (
@@ -123,7 +197,7 @@ export default async function AdminPage() {
                 </form>
               )}
             </div>
-            {(["rounds", "questions", "culture_notes"] as const).map((f) => (
+            {(["questions", "rounds", "culture_notes"] as const).filter((f) => p[f]).map((f) => (
               <div key={f} className="mt-3">
                 <h4 className="text-xs font-semibold uppercase text-stone-500">{f.replace("_", " ")}</h4>
                 <p className="whitespace-pre-wrap break-words text-sm">{p[f]}</p>
