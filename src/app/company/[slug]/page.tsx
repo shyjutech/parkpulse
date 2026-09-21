@@ -4,6 +4,7 @@ import BarList from "@/components/BarList";
 import { VerifiedBadge } from "@/components/CompanyCard";
 import { FollowButton, RequestButton } from "@/components/CompanyActions";
 import ExperienceCard from "@/components/ExperienceCard";
+import InlineNudge from "@/components/InlineNudge";
 import Pagination from "@/components/Pagination";
 import SalaryChart from "@/components/SalaryChart";
 import Stars from "@/components/Stars";
@@ -215,8 +216,11 @@ export default async function CompanyPage({ params, searchParams }: PageProps<"/
           </p>
         ) : view === "reports" ? (
           <div className="mt-4 space-y-4">
-            {experiences.map((e) => (
-              <ExperienceCard key={e.id} e={e} save={{ signedIn: !!viewer.userId, saved: saved.has(e.id), next: here }} />
+            {experiences.map((e, i) => (
+              <div key={e.id} className="space-y-4">
+                <ExperienceCard e={e} save={{ signedIn: !!viewer.userId, saved: saved.has(e.id), next: here }} />
+                {i === 2 && !viewer.hasContributed && <InlineNudge />}
+              </div>
             ))}
           </div>
         ) : (

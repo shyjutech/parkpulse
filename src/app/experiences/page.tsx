@@ -1,6 +1,7 @@
 import Link from "next/link";
 import ExperienceCard from "@/components/ExperienceCard";
 import Filters from "@/components/Filters";
+import InlineNudge from "@/components/InlineNudge";
 import Pagination from "@/components/Pagination";
 import TrackEvent from "@/components/TrackEvent";
 import { PAGE_SIZE, RECENCY_OPTIONS } from "@/lib/constants";
@@ -89,13 +90,15 @@ export default async function ExperiencesPage({ searchParams }: PageProps<"/expe
       )}
 
       <div className="mt-4 space-y-4">
-        {rows.map((r) => (
-          <ExperienceCard
-            key={r.id}
-            e={r}
-            company={{ name: r.company_name, slug: r.company_slug }}
-            save={{ signedIn: !!viewer.userId, saved: saved.has(r.id), next: here }}
-          />
+        {rows.map((r, i) => (
+          <div key={r.id} className="space-y-4">
+            <ExperienceCard
+              e={r}
+              company={{ name: r.company_name, slug: r.company_slug }}
+              save={{ signedIn: !!viewer.userId, saved: saved.has(r.id), next: here }}
+            />
+            {i === 2 && !viewer.hasContributed && <InlineNudge />}
+          </div>
         ))}
       </div>
       <Pagination
