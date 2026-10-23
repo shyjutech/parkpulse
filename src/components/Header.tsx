@@ -20,6 +20,7 @@ export default async function Header() {
           <Link href="/experiences" className={link}>Experiences</Link>
           <Link href="/companies" className={link}>Companies</Link>
           <Link href="/submit" className={link}>Share</Link>
+          <Link href="/interview" className={link}>Mock interview</Link>
           {viewer.userId ? (
             <>
               <Link href="/dashboard" className={link}>My space</Link>
