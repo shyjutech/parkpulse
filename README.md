@@ -10,9 +10,10 @@ Stack: Next.js (App Router) · TypeScript · Tailwind · Supabase (Auth, Postgre
 
 1. Create a Supabase project.
 2. Run the files in `supabase/migrations/` **in order** in the SQL editor (or `supabase db push`):
-   `20260919000000_phase1_init.sql`, then `20260921000000_open_browse_engagement.sql`.
+   `20260919000000_phase1_init.sql`, `20260921000000_open_browse_engagement.sql`,
+   `20261023000000_submit_funnel_events.sql`, `20261024000000_ai_interview_credits.sql`.
    The first seeds `public.admins` with the admin email; edit that insert first if the admin should differ.
-   The second is additive and keeps existing rows.
+   Every migration after it is additive and keeps existing rows. See [`docs/rollback-snippets.md`](docs/rollback-snippets.md) if something needs to be undone.
 3. Authentication → Providers → enable **Google** (create OAuth credentials in Google Cloud; the authorised redirect URI is shown in Supabase).
 4. Authentication → URL Configuration: set the Site URL and add `http://localhost:3000/auth/callback` and `<your-domain>/auth/callback` as redirect URLs.
 5. `cp .env.example .env.local` and fill in the values. Never commit `.env.local`.
