@@ -66,6 +66,30 @@ describe("buildGenericQuestionMessages", () => {
     const messages = buildGenericQuestionMessages(ctx, [{ role: "system", content: "sneaky" } as ChatMessage]);
     expect(messages.filter((m) => m.content === "sneaky")).toHaveLength(0);
   });
+
+  it("gives concrete, distinct calibration guidance per experience level — not just the bare level string", () => {
+    const byLevel = (level: string) => buildGenericQuestionMessages({ ...ctx, experienceLevel: level }, [])[0].content;
+
+    // The exact live failure this fixes: a 10+ years session should be told
+    // NOT to ask basic definitional questions like "what is an interface".
+    const senior = byLevel("10+ years");
+    expect(senior.toLowerCase()).toContain("do not ask basic definitional questions");
+    expect(senior.toLowerCase()).toContain("senior");
+
+    const fresher = byLevel("Fresher");
+    expect(fresher.toLowerCase()).toContain("fundamentals");
+    expect(fresher).not.toContain(senior.split("\n").find((l) => l.toLowerCase().includes("senior/staff")));
+
+    // All five of this app's real levels produce guidance, each different from the others.
+    const levels = ["Fresher", "0–2 years", "3–5 years", "6–10 years", "10+ years"];
+    const guidance = levels.map(byLevel);
+    expect(new Set(guidance).size).toBe(levels.length);
+  });
+
+  it("falls back to a generic calibration line for an unrecognised level, rather than omitting guidance", () => {
+    const [system] = buildGenericQuestionMessages({ ...ctx, experienceLevel: "Some Unusual Level" }, []);
+    expect(system.content).toContain("Some Unusual Level");
+  });
 });
 
 describe("buildFeedbackMessages", () => {
