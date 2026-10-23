@@ -23,6 +23,8 @@ const emails: Record<string, string> = {
 
 let db: PGlite;
 let company: string;
+let erinId: string;
+let frankId: string;
 
 type Actor = keyof typeof ids | "anon";
 
@@ -511,5 +513,213 @@ describe("growth metrics", () => {
   it("public_stats returns counts only", async () => {
     const r = await as("anon", () => q("select public.public_stats() as s"));
     expect(Object.keys(r.rows[0].s as object).sort()).toEqual(["approved_reports", "companies_with_reports"]);
+  });
+});
+
+describe("AI interview credits", () => {
+  const extraActor = "erin" as Actor;
+  const frankActor = "frank" as Actor;
+
+  beforeAll(async () => {
+    const erin = "00000000-0000-0000-0000-00000000000e";
+    const frank = "00000000-0000-0000-0000-00000000000f";
+    ids["erin" as keyof typeof ids] = erin;
+    ids["frank" as keyof typeof ids] = frank;
+    emails.erin = "erin@example.com";
+    emails.frank = "frank@example.com";
+    erinId = erin;
+    frankId = frank;
+    await q("insert into auth.users (id, email) values ($1, 'erin@example.com'), ($2, 'frank@example.com')", [erin, frank]);
+  });
+
+  async function approve(role: string) {
+    const row = await q("select id from public.submissions where role = $1", [role]);
+    const id = row.rows[0].id as string;
+    await as("admin", () => q("select public.moderate_submission($1, 'approved')", [id]));
+    return id;
+  }
+
+  it("grants no credit while pending, and none on rejection", async () => {
+    await insertSubmission(extraActor, { user_id: erinId, role: "Credit Test Pending" });
+    const row = await q("select id from public.submissions where role = 'Credit Test Pending'");
+    const subId = row.rows[0].id as string;
+    const countFor = async () =>
+      (await q("select count(*)::int as n from public.interview_credits where submission_id = $1", [subId])).rows[0].n;
+    expect(await countFor()).toBe(0);
+    await as("admin", () => q("select public.moderate_submission($1, 'rejected')", [subId]));
+    expect(await countFor()).toBe(0);
+  });
+
+  it("grants exactly one credit on approval, and re-approval never grants a second one for the same submission", async () => {
+    const row = await q("select id from public.submissions where role = 'Credit Test Pending'");
+    const subId = row.rows[0].id as string;
+    await as("admin", () => q("select public.moderate_submission($1, 'approved')", [subId]));
+    const once = await q("select count(*)::int as n from public.interview_credits where submission_id = $1", [subId]);
+    expect(once.rows[0].n).toBe(1);
+
+    // reject then re-approve the SAME submission — the unique constraint on
+    // submission_id (plus the trigger's own guard) must stop a second grant.
+    await as("admin", () => q("select public.moderate_submission($1, 'rejected')", [subId]));
+    await as("admin", () => q("select public.moderate_submission($1, 'approved')", [subId]));
+    const twice = await q("select count(*)::int as n from public.interview_credits where submission_id = $1", [subId]);
+    expect(twice.rows[0].n).toBe(1);
+  });
+
+  it("enforces the lifetime cap of 3 credits per user", async () => {
+    // Erin already has 1 credit. Three more approvals should grant only 2
+    // more (reaching the cap of 3), not a 3rd on top.
+    for (const role of ["Credit Cap B", "Credit Cap C", "Credit Cap D"]) {
+      await insertSubmission(extraActor, { user_id: erinId, role });
+    }
+    for (const role of ["Credit Cap B", "Credit Cap C", "Credit Cap D"]) await approve(role);
+
+    const total = await q("select count(*)::int as n from public.interview_credits where user_id = $1", [erinId]);
+    expect(total.rows[0].n).toBe(3);
+    // And Erin genuinely has 4 approved submissions, confirming the cap (not
+    // a coincidence of only 3 approvals existing).
+    const approved = await q(
+      "select count(*)::int as n from public.submissions where user_id = $1 and status = 'approved'",
+      [erinId],
+    );
+    expect(approved.rows[0].n).toBe(4);
+  });
+
+  it("a user can read only their own credits and sessions, and cannot write either table directly", async () => {
+    const mine = await as(extraActor, () => q("select id from public.interview_credits"));
+    expect(mine.rows.length).toBe(3);
+    const othersView = await as(frankActor, () => q("select id from public.interview_credits"));
+    expect(othersView.rows).toHaveLength(0);
+
+    const anyCreditId = (await q("select id from public.interview_credits limit 1")).rows[0].id as string;
+    await expect(
+      as(extraActor, () => q("insert into public.interview_credits (user_id, submission_id) values ($1, $2)", [erinId, anyCreditId])),
+    ).rejects.toThrow(/permission denied/i);
+    await expect(as(extraActor, () => q("update public.interview_credits set consumed_at = now()"))).rejects.toThrow(/permission denied/i);
+    await expect(
+      as(extraActor, () => q("insert into public.ai_interview_sessions (user_id, role, experience_level) values ($1, 'Dev', 'Fresher')", [erinId])),
+    ).rejects.toThrow(/permission denied/i);
+    await expect(as("anon", () => q("select * from public.interview_credits"))).rejects.toThrow(/permission denied/i);
+    await expect(as("anon", () => q("select * from public.ai_interview_sessions"))).rejects.toThrow(/permission denied/i);
+  });
+});
+
+describe("start_ai_interview", () => {
+  const extraActor = "erin" as Actor;
+  const frankActor = "frank" as Actor;
+
+  it("fails for an unauthenticated caller", async () => {
+    await expect(as("anon", () => q("select public.start_ai_interview('Dev', 'Fresher')"))).rejects.toThrow(/permission denied/i);
+  });
+
+  it("consumes a credit and opens a session with the given details", async () => {
+    const before = await q("select count(*)::int as n from public.interview_credits where user_id = $1 and consumed_at is null", [erinId]);
+    expect(before.rows[0].n).toBe(3);
+
+    const r = await as(extraActor, () => q("select public.start_ai_interview($1, $2, $3) as id", ["Flutter Developer", "3–5 years", company]));
+    const sessionId = r.rows[0].id as string;
+    expect(sessionId).toBeTruthy();
+
+    const session = await q(
+      "select role, experience_level, company_id, status, message_count from public.ai_interview_sessions where id = $1",
+      [sessionId],
+    );
+    expect(session.rows[0]).toEqual({
+      role: "Flutter Developer",
+      experience_level: "3–5 years",
+      company_id: company,
+      status: "active",
+      message_count: 0,
+    });
+
+    const spent = await q("select consumed_at is not null as consumed, session_id from public.interview_credits where session_id = $1", [sessionId]);
+    expect(spent.rows[0]).toEqual({ consumed: true, session_id: sessionId });
+
+    const after = await q("select count(*)::int as n from public.interview_credits where user_id = $1 and consumed_at is null", [erinId]);
+    expect(after.rows[0].n).toBe(2);
+  });
+
+  it("enforces the daily session limit even while credits remain", async () => {
+    // Erin used 1 session today already (previous test); the cap is 2/day.
+    await as(extraActor, () => q("select public.start_ai_interview('Dev', 'Fresher')"));
+    await expect(as(extraActor, () => q("select public.start_ai_interview('Dev', 'Fresher')"))).rejects.toThrow(/daily interview limit/);
+    // The 3rd (rejected) call must not have spent the remaining credit.
+    const remaining = await q("select count(*)::int as n from public.interview_credits where user_id = $1 and consumed_at is null", [erinId]);
+    expect(remaining.rows[0].n).toBe(1);
+  });
+
+  it("fails cleanly, without creating a session, when no credit is available", async () => {
+    const before = await q("select count(*)::int as n from public.ai_interview_sessions where user_id = $1", [frankId]);
+    await expect(as(frankActor, () => q("select public.start_ai_interview('Dev', 'Fresher')"))).rejects.toThrow(/no interview credit/);
+    const after = await q("select count(*)::int as n from public.ai_interview_sessions where user_id = $1", [frankId]);
+    expect(after.rows[0].n).toBe(before.rows[0].n);
+  });
+
+  // PGlite exposes a single serialized connection (confirmed empirically: two
+  // concurrent 300ms pg_sleep() calls took ~600ms, not ~300ms), so two calls
+  // issued via Promise.all still run back-to-back, never truly overlapping.
+  // A "concurrent calls" test against this harness would pass even with zero
+  // locking in start_ai_interview, so it would prove nothing. What we CAN
+  // verify here is the invariant that matters: spending a credit through one
+  // call makes it correctly unavailable to the next — exercised by the two
+  // tests above (3 -> 2 -> 1 unconsumed credits, one call at a time) and
+  // below (one credit in, exactly one session out). The actual race-safety
+  // argument rests on two well-documented Postgres properties the function
+  // uses: pg_advisory_xact_lock serializes this whole function per user, and
+  // SELECT ... FOR UPDATE re-checks `consumed_at is null` after acquiring the
+  // row lock, so a credit a concurrent transaction already consumed is
+  // correctly excluded rather than handed out twice. Proving that empirically
+  // would need two real, separately-connected Postgres clients (e.g. against
+  // a live Supabase project), which this PGlite-based harness cannot provide.
+  it("spending the last credit leaves exactly one session and zero unconsumed credits", async () => {
+    await insertSubmission(frankActor, { user_id: frankId, role: "Concurrency Test" });
+    const row = await q("select id from public.submissions where role = 'Concurrency Test'");
+    await as("admin", () => q("select public.moderate_submission($1, 'approved')", [row.rows[0].id]));
+
+    const r = await as(frankActor, () => q("select public.start_ai_interview('Dev', 'Fresher') as id"));
+    expect(r.rows[0].id).toBeTruthy();
+    await expect(as(frankActor, () => q("select public.start_ai_interview('Dev', 'Fresher')"))).rejects.toThrow(/no interview credit/);
+
+    const sessions = await q("select count(*)::int as n from public.ai_interview_sessions where user_id = $1", [frankId]);
+    expect(sessions.rows[0].n).toBe(1);
+    const unconsumed = await q("select count(*)::int as n from public.interview_credits where user_id = $1 and consumed_at is null", [frankId]);
+    expect(unconsumed.rows[0].n).toBe(0);
+  });
+});
+
+describe("backfill_legacy_credits", () => {
+  it("is admin-only", async () => {
+    await expect(as("bob", () => q("select public.backfill_legacy_credits()"))).rejects.toThrow(/admin only/);
+  });
+
+  it("grants one credit per qualifying user (not per submission), skips users already at or past the cap, and is idempotent", async () => {
+    // George: never contributed before this test -- should get exactly 1.
+    const george = "00000000-0000-0000-0000-0000000000f1";
+    await q("insert into auth.users (id, email) values ($1, 'george@example.com')", [george]);
+    ids["george" as keyof typeof ids] = george;
+    emails.george = "george@example.com";
+    const sub = await q(
+      `insert into public.submissions (user_id, company_id, role, experience_level, interview_date, questions, status)
+       values ($1, $2, 'Backfill George', '0–2 years', '2026-01-01', 'What was asked in the interview?', 'approved') returning id`,
+      [george, company],
+    );
+    void sub;
+
+    // Erin is already at the cap (3) from earlier tests -- must stay at 3, not grow to 4.
+    const before = await q("select count(*)::int as n from public.interview_credits where user_id = $1", [erinId]);
+    expect(before.rows[0].n).toBe(3);
+
+    const granted1 = await as("admin", () => q("select public.backfill_legacy_credits() as n"));
+    expect(Number(granted1.rows[0].n)).toBeGreaterThanOrEqual(1);
+
+    const georgeCredits = await q("select count(*)::int as n from public.interview_credits where user_id = $1", [george]);
+    expect(georgeCredits.rows[0].n).toBe(1);
+    const erinCredits = await q("select count(*)::int as n from public.interview_credits where user_id = $1", [erinId]);
+    expect(erinCredits.rows[0].n).toBe(3);
+
+    // Second call: nothing new to grant.
+    const granted2 = await as("admin", () => q("select public.backfill_legacy_credits() as n"));
+    expect(Number(granted2.rows[0].n)).toBe(0);
+    const georgeCreditsAgain = await q("select count(*)::int as n from public.interview_credits where user_id = $1", [george]);
+    expect(georgeCreditsAgain.rows[0].n).toBe(1);
   });
 });

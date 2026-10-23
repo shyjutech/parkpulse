@@ -79,3 +79,48 @@ it("reclassifies historical submit_started events to form_view on upgrade", asyn
   await db.query("insert into public.events (name, anon_id) values ('submit_started', 'new-visitor')");
   await db.exec("reset role");
 });
+
+it("does not retroactively grant credits for pre-existing approvals, but the backfill function does", async () => {
+  const db = new PGlite({ extensions: { pg_trgm } });
+  const dir = path.join(__dirname, "../../supabase/migrations");
+  const files = fs.readdirSync(dir).sort();
+  const cutover = files.findIndex((f) => f.includes("ai_interview_credits"));
+  expect(cutover).toBeGreaterThan(0);
+
+  await db.exec(fs.readFileSync(path.join(__dirname, "stub_supabase.sql"), "utf8"));
+  for (const f of files.slice(0, cutover)) await db.exec(fs.readFileSync(path.join(dir, f), "utf8"));
+
+  // A submission approved entirely before the credit system existed.
+  const u = "00000000-0000-0000-0000-0000000000b1";
+  await db.query("insert into auth.users (id, email) values ($1, 'preexisting@example.com')", [u]);
+  const c = await db.query<{ id: string }>(
+    "insert into public.companies (name, normalized_name, slug, park) values ('Pre Co','pre co','pre-co','Infopark') returning id",
+  );
+  await db.query(
+    `insert into public.submissions (user_id, company_id, role, experience_level, interview_date, questions, status)
+     values ($1, $2, 'Legacy Approved Role', '0–2 years', '2026-01-01', 'What was asked?', 'approved')`,
+    [u, c.rows[0].id],
+  );
+
+  for (const f of files.slice(cutover)) await db.exec(fs.readFileSync(path.join(dir, f), "utf8"));
+
+  const before = await db.query<{ n: number }>(
+    "select count(*)::int as n from public.interview_credits where user_id = $1",
+    [u],
+  );
+  expect(before.rows[0].n).toBe(0);
+
+  await db.query(
+    "select set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-0000000000ad\",\"email\":\"shyjutalks@gmail.com\"}', false)",
+  );
+  await db.exec("set role authenticated");
+  const granted = await db.query<{ n: number }>("select public.backfill_legacy_credits() as n");
+  await db.exec("reset role");
+  expect(Number(granted.rows[0].n)).toBe(1);
+
+  const after = await db.query<{ n: number }>(
+    "select count(*)::int as n from public.interview_credits where user_id = $1",
+    [u],
+  );
+  expect(after.rows[0].n).toBe(1);
+});

@@ -238,7 +238,8 @@ export default async function AdminPage() {
                 <p className="whitespace-pre-wrap break-words text-sm">{p[f]}</p>
               </div>
             ))}
-            <form action={moderate} className="mt-4 flex gap-3">
+            <p className="mt-3 text-xs text-stone-500">Approving grants the author 1 AI interview credit.</p>
+            <form action={moderate} className="mt-2 flex gap-3">
               <input type="hidden" name="id" value={p.id} />
               <button name="decision" value="approved" className={`${btn} bg-brand-700 text-white hover:bg-brand-800`}>Approve</button>
               <button name="decision" value="rejected" className={`${btn} border border-stone-300 hover:border-red-600 hover:text-red-700`}>Reject</button>
