@@ -40,6 +40,16 @@ interface Funnel {
   submit_completed: number;
 }
 
+interface AiMetrics {
+  credits_granted: number;
+  credits_redeemed: number;
+  sessions_started: number;
+  sessions_completed: number;
+  sessions_failed: number;
+  sessions_abandoned: number;
+  avg_tokens_per_completed_session: number;
+}
+
 interface Growth {
   visitors: number;
   return_visitors: number;
@@ -50,7 +60,12 @@ interface Growth {
   requests: number;
   by_source: { source: string; visitors: number; submissions: number }[];
   funnel: Funnel;
+  ai: AiMetrics;
 }
+
+// Phase 1's own numbers, recorded when this metric was first introduced —
+// shown as a fixed reference point, not live data.
+const CONTRIBUTION_RATE_BASELINE = "29% (12/42, Phase 1 launch)";
 
 interface Requested {
   company_id: string;
@@ -118,8 +133,12 @@ export default async function AdminPage() {
       {m && (
         <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
           {[
-            ["Contribution rate", pct(m.contributors, m.authenticated_users), `${m.contributors}/${m.authenticated_users} signed-in users`],
-            ["Unlock engagement", pct(m.contributors_viewed_full_data, m.contributors), `${m.contributors_viewed_full_data}/${m.contributors} contributors`],
+            ["Contribution rate", pct(m.contributors, m.authenticated_users), `${m.contributors}/${m.authenticated_users} signed-in users · baseline ${CONTRIBUTION_RATE_BASELINE}`],
+            [
+              "Credit redemption",
+              growth ? pct(growth.ai.credits_redeemed, growth.ai.credits_granted) : "–",
+              growth ? `${growth.ai.credits_redeemed}/${growth.ai.credits_granted} credits` : "unavailable",
+            ],
             ["Approval rate", pct(m.approved_submissions, m.submissions), `${m.approved_submissions}/${m.submissions} submissions`],
             ["Returning contributors", String(m.returning_contributors), "active on 2+ days"],
           ].map(([label, value, sub]) => (
@@ -189,6 +208,23 @@ export default async function AdminPage() {
               </tbody>
             </table>
           )}
+
+          <h3 className="mt-6 text-sm font-semibold text-stone-700">AI mock interview</h3>
+          <dl className="mt-2 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
+            {[
+              ["Credits granted", growth.ai.credits_granted],
+              ["Credits redeemed", `${growth.ai.credits_redeemed} (${pct(growth.ai.credits_redeemed, growth.ai.credits_granted)})`],
+              ["Sessions started", growth.ai.sessions_started],
+              ["Sessions completed", `${growth.ai.sessions_completed} (${pct(growth.ai.sessions_completed, growth.ai.sessions_started)})`],
+              ["Sessions failed / abandoned", `${growth.ai.sessions_failed} / ${growth.ai.sessions_abandoned}`],
+              ["Avg. tokens per completed session", growth.ai.avg_tokens_per_completed_session],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="rounded-lg border border-stone-200 bg-white p-3">
+                <dt className="text-stone-500">{label}</dt>
+                <dd className="text-lg font-semibold">{value}</dd>
+              </div>
+            ))}
+          </dl>
         </section>
       )}
 

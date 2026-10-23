@@ -16,7 +16,10 @@ const STATUS: Record<string, { label: string; cls: string }> = {
   rejected: { label: "Not published", cls: "bg-stone-200 text-stone-700" },
 };
 
+const MAX_CREDITS = 3;
+
 interface Mine { id: string; company_name: string; company_slug: string; role: string; status: string; submitted_at: string }
+interface Credit { consumed_at: string | null }
 interface Followed { company_id: string; name: string; slug: string; park: string; review_count: number; latest_report_on: string | null; new_count: number }
 interface Plan { id: string; role: string | null; interview_date: string | null; companies: { name: string; slug: string } | null }
 interface SavedRow { created_at: string; submissions: (Experience & { companies: { name: string; slug: string } | null }) | null }
@@ -30,7 +33,7 @@ export default async function DashboardPage() {
   if (!viewer.userId) redirect("/login?next=/dashboard");
   const supabase = await createClient();
 
-  const [mineRes, followedRes, newRes, plansRes, itemsRes, savedRes] = await Promise.all([
+  const [mineRes, followedRes, newRes, plansRes, itemsRes, savedRes, creditsRes] = await Promise.all([
     supabase.rpc("my_submissions"),
     supabase.rpc("my_followed_companies"),
     supabase.rpc("my_new_experiences", { p_limit: 5 }),
@@ -41,15 +44,20 @@ export default async function DashboardPage() {
       .select(`created_at, submissions(${EXPERIENCE_COLUMNS}, companies(name, slug))`)
       .order("created_at", { ascending: false })
       .limit(20),
+    supabase.from("interview_credits").select("consumed_at"),
   ]);
   const mine = (mineRes.data ?? []) as Mine[];
+  const credits = (creditsRes.data ?? []) as Credit[];
+  const available = credits.filter((c) => !c.consumed_at).length;
+  const used = credits.length - available;
+  const hasPending = mine.some((m) => m.status === "pending");
   const followed = (followedRes.data ?? []) as Followed[];
   const fresh = (newRes.data ?? []) as ExperienceWithCompany[];
   const plans = (plansRes.data ?? []) as unknown as Plan[];
   const items = (itemsRes.data ?? []) as { plan_id: string; done: boolean }[];
   const saved = ((savedRes.data ?? []) as unknown as SavedRow[]).filter((s) => s.submissions);
   const savedSet = await savedIds(supabase, [...saved.map((s) => s.submissions!.id), ...fresh.map((f) => f.id)], true);
-  const anyError = mineRes.error || followedRes.error || plansRes.error || savedRes.error;
+  const anyError = mineRes.error || followedRes.error || plansRes.error || savedRes.error || creditsRes.error;
 
   return (
     <div className="space-y-10">
@@ -58,6 +66,40 @@ export default async function DashboardPage() {
         <p className="mt-1 text-sm text-stone-600">Private to you. Nothing here is shown publicly.</p>
       </div>
       <ReminderBanner />
+
+      <section aria-labelledby="ai-interview" className="rounded-lg border border-brand-600/30 bg-brand-50 p-5">
+        <H id="ai-interview">AI mock interview</H>
+        {available > 0 ? (
+          <>
+            <p className="mt-1 text-sm text-stone-700">
+              You have {available} free interview{available === 1 ? "" : "s"} available.
+            </p>
+            <Link href="/interview" className="mt-3 inline-flex min-h-11 items-center rounded-md bg-brand-700 px-4 text-sm font-medium text-white hover:bg-brand-800">
+              Start AI interview
+            </Link>
+          </>
+        ) : hasPending && credits.length < MAX_CREDITS ? (
+          <p className="mt-1 text-sm text-stone-700">
+            Your submission is pending review. You&apos;ll get a free AI mock interview once it&apos;s approved.
+          </p>
+        ) : credits.length > 0 ? (
+          <p className="mt-1 text-sm text-stone-700">
+            You&apos;ve used {used} of {MAX_CREDITS} free interviews.
+            {credits.length < MAX_CREDITS && (
+              <>
+                {" "}
+                <Link href="/submit" className="text-brand-700 underline">Share another experience</Link> to earn another.
+              </>
+            )}
+          </p>
+        ) : (
+          <p className="mt-1 text-sm text-stone-700">
+            Share an interview experience that gets approved to earn a free AI mock interview, up to {MAX_CREDITS}.{" "}
+            <Link href="/submit" className="text-brand-700 underline">Share your experience</Link>.
+          </p>
+        )}
+      </section>
+
       {anyError && (
         <p role="alert" className="rounded-md bg-red-50 p-3 text-sm text-red-800">
           Some of this page couldn&apos;t load. Please refresh in a moment.

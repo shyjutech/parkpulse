@@ -214,3 +214,45 @@ it("upgrades interview_credits.submission_id to nullable/on-delete-set-null with
   );
   expect(after.rows).toEqual([{ id: credit.rows[0].id, submission_id: null }]);
 });
+
+it("upgrades growth_metrics to include the 'ai' block and preserves pre-existing credits/sessions untouched", async () => {
+  const db = new PGlite({ extensions: { pg_trgm } });
+  const dir = path.join(__dirname, "../../supabase/migrations");
+  const files = fs.readdirSync(dir).sort();
+  const cutover = files.findIndex((f) => f.includes("ai_interview_surface_metrics"));
+  expect(cutover).toBeGreaterThan(0);
+
+  await db.exec(fs.readFileSync(path.join(__dirname, "stub_supabase.sql"), "utf8"));
+  for (const f of files.slice(0, cutover)) await db.exec(fs.readFileSync(path.join(dir, f), "utf8"));
+
+  const u = "00000000-0000-0000-0000-0000000000f3";
+  await db.query("insert into auth.users (id, email) values ($1, 'pre-phase4@example.com'), ($2, 'admin@shyjutalks.test')", [u, "00000000-0000-0000-0000-0000000000ad"]);
+  const c = await db.query<{ id: string }>(
+    "insert into public.companies (name, normalized_name, slug, park) values ('Pre P4 Co','pre p4 co','pre-p4-co','Infopark') returning id",
+  );
+  const sub = await db.query<{ id: string }>(
+    `insert into public.submissions (user_id, company_id, role, experience_level, interview_date, questions, status)
+     values ($1, $2, 'Legacy P4 Role', '0–2 years', '2026-01-01', 'What was asked?', 'approved') returning id`,
+    [u, c.rows[0].id],
+  );
+  const credit = await db.query<{ id: string }>(
+    "insert into public.interview_credits (user_id, submission_id, consumed_at) values ($1, $2, now()) returning id",
+    [u, sub.rows[0].id],
+  );
+
+  for (const f of files.slice(cutover)) await db.exec(fs.readFileSync(path.join(dir, f), "utf8"));
+
+  // Pre-existing row untouched by the migration.
+  const row = await db.query<{ submission_id: string }>("select submission_id from public.interview_credits where id = $1", [credit.rows[0].id]);
+  expect(row.rows[0].submission_id).toBe(sub.rows[0].id);
+
+  // growth_metrics() now reports it in the new 'ai' block.
+  await db.query(
+    "select set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-0000000000ad\",\"email\":\"shyjutalks@gmail.com\"}', false)",
+  );
+  await db.exec("set role authenticated");
+  const m = await db.query<{ m: { ai: { credits_granted: number; credits_redeemed: number } } }>("select public.growth_metrics() as m");
+  await db.exec("reset role");
+  expect(m.rows[0].m.ai.credits_granted).toBe(1);
+  expect(m.rows[0].m.ai.credits_redeemed).toBe(1);
+});

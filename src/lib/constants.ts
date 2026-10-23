@@ -63,5 +63,9 @@ export const EVENT_NAMES = [
   "follow_added",
   "checklist_created",
   "experience_requested",
+  "credit_granted",
+  "ai_interview_started",
+  "ai_interview_completed",
+  "ai_interview_failed",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];

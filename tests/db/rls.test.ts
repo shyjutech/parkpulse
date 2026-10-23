@@ -1030,3 +1030,68 @@ describe("deleting a submission never silently reduces the credit ledger", () =>
     expect(after.rows).toEqual([{ id: creditId, submission_id: null }]);
   });
 });
+
+describe("Phase 4 surface metrics", () => {
+  const noraActor = "nora" as Actor;
+  let noraId: string;
+
+  beforeAll(async () => {
+    noraId = "00000000-0000-0000-0000-0000000000f2";
+    ids["nora" as keyof typeof ids] = noraId;
+    emails.nora = "nora@example.com";
+    await q("insert into auth.users (id, email) values ($1, 'nora@example.com')", [noraId]);
+  });
+
+  it("submission_earned_credit is admin-only and correctly reports whether approval granted a credit", async () => {
+    await insertSubmission(noraActor, { user_id: noraId, role: "Phase4 Metrics Role" });
+    const row = await q("select id from public.submissions where role = 'Phase4 Metrics Role'");
+    const subId = row.rows[0].id as string;
+
+    await expect(as("bob", () => q("select public.submission_earned_credit($1)", [subId]))).rejects.toThrow(/admin only/);
+    await expect(as("anon", () => q("select public.submission_earned_credit($1)", [subId]))).rejects.toThrow(/permission denied/i);
+
+    const beforeApproval = await as("admin", () => q("select public.submission_earned_credit($1) as earned", [subId]));
+    expect(beforeApproval.rows[0].earned).toBe(false);
+
+    await as("admin", () => q("select public.moderate_submission($1, 'approved')", [subId]));
+    const afterApproval = await as("admin", () => q("select public.submission_earned_credit($1) as earned", [subId]));
+    expect(afterApproval.rows[0].earned).toBe(true);
+  });
+
+  it("growth_metrics includes a correct 'ai' block: granted/redeemed credits, session counts by status, and avg tokens for completed sessions only", async () => {
+    const credits = await q("select count(*)::int as n from public.interview_credits where user_id = $1", [noraId]);
+    expect(credits.rows[0].n).toBe(1); // from the previous test's approval
+
+    const session1 = await as(noraActor, () => q("select public.start_ai_interview('Dev', 'Fresher') as id"));
+    await as(noraActor, () => q("select public.record_ai_turn($1, 100, 50, 'm')", [session1.rows[0].id]));
+    await as(noraActor, () => q("select public.complete_ai_session($1)", [session1.rows[0].id]));
+
+    const before = await as("admin", () => q("select public.growth_metrics() as m"));
+    const ai = (before.rows[0].m as { ai: Record<string, number> }).ai;
+    expect(ai.credits_granted).toBeGreaterThanOrEqual(1);
+    expect(ai.credits_redeemed).toBeGreaterThanOrEqual(1);
+    expect(ai.sessions_started).toBeGreaterThanOrEqual(1);
+    expect(ai.sessions_completed).toBeGreaterThanOrEqual(1);
+    expect(ai.avg_tokens_per_completed_session).toBeGreaterThanOrEqual(150);
+
+    await expect(as("bob", () => q("select public.growth_metrics()"))).rejects.toThrow(/admin only/);
+  });
+
+  it("user_id can be explicitly set to null (for events about a different user) but not to someone else's id", async () => {
+    await as("admin", () => q("insert into public.events (name, user_id) values ('credit_granted', null)"));
+    await expect(
+      as("admin", () => q("insert into public.events (name, user_id) values ('credit_granted', $1)", [noraId])),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("accepts all four new event names and rejects an unknown one", async () => {
+    for (const name of ["credit_granted", "ai_interview_started", "ai_interview_completed", "ai_interview_failed"]) {
+      await q("insert into public.events (name, user_id) values ($1, $2)", [name, noraId]);
+    }
+    const rows = await q("select count(*)::int as n from public.events where user_id = $1 and name like 'ai_interview%' or (user_id = $1 and name = 'credit_granted')", [noraId]);
+    expect(rows.rows[0].n).toBe(4);
+    await expect(
+      q("insert into public.events (name, user_id) values ('credit_denied', $1)", [noraId]),
+    ).rejects.toThrow(/check constraint/i);
+  });
+});

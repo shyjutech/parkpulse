@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { logEvent } from "@/lib/events";
 import { MAX_ANSWER_CHARS, MAX_SKILLS_CHARS, maxQuestions } from "@/lib/interview/constants";
 import { parseFeedback } from "@/lib/interview/feedback";
 import { planNextTurn, type GroundingQuestion } from "@/lib/interview/grounding";
@@ -139,6 +140,7 @@ export async function POST(request: Request) {
     const feedback = completion ? parseFeedback(completion.content) : null;
     const { error: completeErr } = await supabase.rpc("complete_ai_session", { p_session_id: sessionId });
     if (completeErr) return fail("Couldn't finish the interview right now. Please try again.", 500);
+    await logEvent("ai_interview_completed", session.company_id);
     return NextResponse.json({ ok: true, done: true, feedback });
   }
 
@@ -164,6 +166,7 @@ export async function POST(request: Request) {
       // Nothing was ever delivered for this session — restore the credit so
       // the attempt didn't cost anything, and say so plainly.
       const { data: restored } = await supabase.rpc("fail_ai_session", { p_session_id: sessionId });
+      await logEvent("ai_interview_failed", session.company_id);
       return fail(
         restored
           ? "Something went wrong starting your interview. Your credit has been restored — please try again."

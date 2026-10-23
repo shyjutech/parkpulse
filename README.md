@@ -13,7 +13,7 @@ Stack: Next.js (App Router) · TypeScript · Tailwind · Supabase (Auth, Postgre
    `20260919000000_phase1_init.sql`, `20260921000000_open_browse_engagement.sql`,
    `20261023000000_submit_funnel_events.sql`, `20261024000000_ai_interview_credits.sql`,
    `20261025000000_ai_interview_turns.sql`, `20261026000000_ai_interview_abandonment.sql`,
-   `20261027000000_credit_submission_fk_fix.sql`.
+   `20261027000000_credit_submission_fk_fix.sql`, `20261028000000_ai_interview_surface_metrics.sql`.
    The first seeds `public.admins` with the admin email; edit that insert first if the admin should differ.
    Every migration after it is additive and keeps existing rows. See [`docs/rollback-snippets.md`](docs/rollback-snippets.md) if something needs to be undone.
 3. Authentication → Providers → enable **Google** (create OAuth credentials in Google Cloud; the authorised redirect URI is shown in Supabase).
@@ -21,7 +21,9 @@ Stack: Next.js (App Router) · TypeScript · Tailwind · Supabase (Auth, Postgre
 5. `cp .env.example .env.local` and fill in the values. Never commit `.env.local`.
 6. `npm install && npm run dev`
 
-Deploy on Vercel with the same environment variables. `SUPABASE_SERVICE_ROLE_KEY` is not used by Phase 1 code, so leave it unset unless a later phase needs it.
+Deploy on Vercel with the same environment variables. `SUPABASE_SERVICE_ROLE_KEY` is not used anywhere in this app — leave it unset.
+
+To enable `/interview` (the AI mock interview), also set `AI_API_KEY`, `AI_BASE_URL` and `AI_MODEL` — see [AI mock interview](#ai-mock-interview) below. Starting an interview fails with a clear error, without calling anything, if any of the three is unset; the "Start AI interview" button on My space is still shown either way, so set these before a contributor can actually earn and use a credit.
 
 ## Tests
 
@@ -50,6 +52,21 @@ Share `/launch` with UTM tags, e.g. `/launch?utm_source=instagram&utm_medium=bio
 
 The admin page tracks `visitors → form_view → form_start → signin_prompted → signin_returned → submit_completed`. `form_view` fires once per visitor per day on page view; `form_start` fires once per visitor per day on the first real field edit (any visitor, signed in or not — the form itself needs no sign-in until the final step); `signin_prompted`/`signin_returned` bracket an anonymous visitor's trip through Google sign-in from the submit flow specifically. `submit_started` was retired (it only ever measured page views, not intent) and historical rows were relabelled to `form_view`; it stays a DB-permitted name purely so old rows never violate the constraint, though nothing emits it any more.
 
+## AI mock interview
+
+A free, text-only mock interview, earned by contributing. Env vars (server-only, never `NEXT_PUBLIC_`):
+
+- `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL` — all three required, no hardcoded provider or model. Provider-neutral: any OpenAI-compatible chat-completions host works. `AI_BASE_URL` is the API root (e.g. `https://openrouter.ai/api/v1` or `https://api.openai.com/v1`); `/chat/completions` is appended automatically.
+- `AI_INTERVIEW_MAX_QUESTIONS` — optional, default 6.
+
+**How credits work:** approving a submission grants its author 1 free credit (`submissions_grant_credit_trg`), capped at 3 lifetime per user (`max_free_credits()`). Granting is idempotent (a submission can earn at most one credit, ever, even across reject→re-approve) and a credit is a permanent ledger entry — deleting the submission that earned one only detaches the reference, never removes the credit. `start_ai_interview()` consumes the oldest unconsumed credit and enforces a daily session cap (`max_daily_ai_sessions()`, default 2). A session that goes idle for `abandon_timeout_minutes()` (default 20) is marked abandoned, with the credit restored if fewer than 2 questions were answered; this is enforced on every use (`start_ai_interview`, the respond route), not by a scheduled job — none exists in this project.
+
+**How questions are generated:** deterministic, not model-reported. If the chosen company has approved reports, their real `questions` text is served first, verbatim, with no model call at all. Once those run out (or none exist), questions come from the model, explicitly instructed not to imply they're company-specific. The UI labels each accordingly ("Reported by candidates" / "Generic for this role").
+
+**Where it's surfaced:** My space shows credit status (pending / available / used, up to 3) and a "Start AI interview" button when one is available; the submit-confirmation page mentions it after a submission, unless the author is already at the cap. It is not in the main navigation.
+
+See [`docs/manual-test-checklist-interview.md`](docs/manual-test-checklist-interview.md) before relying on a new provider/model, and [`docs/rollback-snippets.md`](docs/rollback-snippets.md) for emergency SQL (disabling credit grants, adjusting or disabling the abandonment sweep, a one-query check that every migration is applied).
+
 ## Phase discipline
 
-Phase 1 plus the open-browse / engagement improvements are implemented. AI features are deliberately deferred.
+Phase 1, the open-browse / engagement improvements, and the AI mock interview (credits, the interviewer, and surfacing it) are implemented.

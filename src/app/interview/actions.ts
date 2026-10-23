@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { EXPERIENCE_LEVELS } from "@/lib/constants";
+import { logEvent } from "@/lib/events";
 import { createClient } from "@/lib/supabase/server";
 
 export type StartResult = { ok: true; sessionId: string } | { ok: false; message: string };
@@ -38,5 +39,6 @@ export async function startInterview(fd: FormData): Promise<StartResult> {
     return { ok: false, message: FRIENDLY };
   }
   if (typeof data !== "string") return { ok: false, message: FRIENDLY };
+  await logEvent("ai_interview_started", companyId);
   return { ok: true, sessionId: data };
 }
