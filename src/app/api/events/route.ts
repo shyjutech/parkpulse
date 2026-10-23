@@ -2,13 +2,19 @@ import { NextResponse } from "next/server";
 import type { EventName } from "@/lib/constants";
 import { isEventName, logEvent } from "@/lib/events";
 
-// Only page-level events may be reported by the browser. Outcome events
-// (submit_completed, save_added, follow_added, ...) are logged by server
-// actions after the action succeeds, so they can't be forged from here.
+// Only page-level and client-only-observable events may be reported by the
+// browser. signin_prompted/signin_returned are inherently client-only (the
+// server has no way to know a button was clicked or a draft was restored),
+// so they're self-reported same as the others here. Outcome events that a
+// server CAN verify (submit_completed, save_added, follow_added, ...) are
+// logged by server actions after the action succeeds instead.
 const CLIENT_EVENTS: readonly EventName[] = [
   "landing_view",
   "company_view",
-  "submit_started",
+  "form_view",
+  "form_start",
+  "signin_prompted",
+  "signin_returned",
   "search_used",
   "visit",
   "campaign_view",

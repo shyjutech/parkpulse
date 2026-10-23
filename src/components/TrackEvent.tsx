@@ -2,16 +2,12 @@
 
 import { useEffect } from "react";
 import type { EventName } from "@/lib/constants";
+import { postEvent } from "@/lib/clientEvents";
 
-/** Fires one analytics event when mounted. Failures are ignored. */
+/** Fires one analytics event when mounted. */
 export default function TrackEvent({ name, companyId }: { name: EventName; companyId?: string }) {
   useEffect(() => {
-    fetch("/api/events", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, companyId }),
-      keepalive: true,
-    }).catch(() => {});
+    postEvent(name, companyId);
   }, [name, companyId]);
   return null;
 }

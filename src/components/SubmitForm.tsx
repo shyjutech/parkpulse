@@ -1,8 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useSyncExternalStore, useTransition, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, useTransition, type ReactNode } from "react";
 import { submitExperience } from "@/app/submit/actions";
+import { consumePendingSignin, logOncePerDay, markPendingSignin, postEvent } from "@/lib/clientEvents";
 import {
   DIFFICULTIES,
   EXPERIENCE_LEVELS,
@@ -145,10 +146,20 @@ function FormInner({
   const [message, setMessage] = useState<string | null>(null);
 
   function update(next: SubmissionInput, name = companyName, nextStep = step) {
+    // Every real field edit goes through here (never through the draft-restore
+    // path below), so this is "the user actually started filling the form in" —
+    // for any visitor, signed in or not. Deduped per day like `visit`.
+    logOncePerDay("form_start");
     setV(next);
     saveDraft({ v: next, companyName: name, step: nextStep });
   }
   const set = <K extends keyof SubmissionInput>(k: K, val: SubmissionInput[K]) => update({ ...v, [k]: val });
+
+  // Pairs with signin_prompted below: only fires once, and only when the user
+  // actually left mid-submission to sign in and came back with their draft intact.
+  useEffect(() => {
+    if (signedIn && initial.restored && consumePendingSignin()) postEvent("signin_returned");
+  }, [signedIn, initial.restored]);
 
   const company: CompanyValue = { companyId: v.company_id, companyName, newName: v.new_company_name, newPark: v.new_company_park };
   const optionalFilled = !!(v.rounds || v.difficulty || v.outcome || v.salary_type || v.rating || v.culture_notes);
@@ -254,7 +265,11 @@ function FormInner({
             </button>
           ) : (
             <div className="flex-1 sm:max-w-xs">
-              <LoginButton next="/submit" />
+              {/* Capture phase so this fires before LoginButton's own click handler
+                  redirects to Google. Doesn't touch LoginButton itself. */}
+              <div onClickCapture={() => { postEvent("signin_prompted"); markPendingSignin(); }}>
+                <LoginButton next="/submit" />
+              </div>
               <p className="mt-2 text-xs text-stone-500">Sign in to submit. Your draft is saved on this device and will be here when you return.</p>
             </div>
           )}

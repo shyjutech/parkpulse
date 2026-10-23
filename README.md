@@ -41,7 +41,11 @@ The database tests apply the real migration to an in-process Postgres (PGlite) w
 
 ## Instagram campaign
 
-Share `/launch` with UTM tags, e.g. `/launch?utm_source=instagram&utm_medium=bio&utm_campaign=first50`. The first-touch UTM is stored in a 30-day cookie and attached to later events; the admin page shows visitors and submissions by source.
+Share `/launch` with UTM tags, e.g. `/launch?utm_source=instagram&utm_medium=bio&utm_campaign=first50`. The first-touch UTM is stored in a 30-day cookie and attached to later events; the admin page shows visitors and submissions by source. Ready-to-copy links for bio/story/reel/DM are in [`docs/campaign-links.md`](docs/campaign-links.md).
+
+## Submission funnel
+
+The admin page tracks `visitors → form_view → form_start → signin_prompted → signin_returned → submit_completed`. `form_view` fires once per visitor per day on page view; `form_start` fires once per visitor per day on the first real field edit (any visitor, signed in or not — the form itself needs no sign-in until the final step); `signin_prompted`/`signin_returned` bracket an anonymous visitor's trip through Google sign-in from the submit flow specifically. `submit_started` was retired (it only ever measured page views, not intent) and historical rows were relabelled to `form_view`; it stays a DB-permitted name purely so old rows never violate the constraint, though nothing emits it any more.
 
 ## Phase discipline
 

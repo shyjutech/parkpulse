@@ -461,15 +461,51 @@ describe("company requests (demand capture)", () => {
 });
 
 describe("growth metrics", () => {
-  it("counts visits, return visits and UTM sources; admin only", async () => {
+  it("builds the submission funnel from unique visitors per stage, admin only", async () => {
+    // v1 goes all the way through the funnel; v2 only visits. Each funnel
+    // stage should therefore count 1, except "visitors" which counts both.
     await as("anon", () => q("insert into public.events (name, anon_id, utm_source, utm_medium, utm_campaign) values ('visit','v1','instagram','bio','first50')"));
     await q("insert into public.events (name, anon_id, created_at) values ('visit','v1', now() - interval '2 days')");
-    await as("anon", () => q("insert into public.events (name, anon_id) values ('submit_started','v1')"));
+    await as("anon", () => q("insert into public.events (name, anon_id) values ('visit','v2')"));
+    await as("anon", () => q("insert into public.events (name, anon_id) values ('form_view','v1')"));
+    await as("anon", () => q("insert into public.events (name, anon_id) values ('form_start','v1')"));
+    await as("anon", () => q("insert into public.events (name, anon_id) values ('signin_prompted','v1')"));
+    await as("anon", () => q("insert into public.events (name, anon_id) values ('signin_returned','v1')"));
+    await as("anon", () => q("insert into public.events (name, anon_id, utm_source) values ('submit_completed','v1','instagram')"));
     await as("anon", () => q("insert into public.events (name, anon_id, utm_source) values ('save_added','v1','instagram')"));
+
     await expect(as("bob", () => q("select public.growth_metrics()"))).rejects.toThrow(/admin only/);
-    const m = (await as("admin", () => q("select public.growth_metrics() as m"))).rows[0].m as Record<string, unknown>;
-    expect(m).toMatchObject({ return_visitors: 1, form_starts: 1, saves: 1, requests: 3 });
+    const m = (await as("admin", () => q("select public.growth_metrics() as m"))).rows[0].m as {
+      return_visitors: number;
+      saves: number;
+      requests: number;
+      by_source: unknown;
+      funnel: Record<string, number>;
+    };
+    expect(m.return_visitors).toBe(1);
+    expect(m.saves).toBe(1);
+    expect(m.requests).toBe(3);
+    expect(m.funnel).toEqual({
+      visitors: 2,
+      form_view: 1,
+      form_start: 1,
+      signin_prompted: 1,
+      signin_returned: 1,
+      submit_completed: 1,
+    });
     expect(JSON.stringify(m.by_source)).toContain("instagram");
+  });
+
+  it("still permits the retired submit_started name at the DB level (kept so old rows stay valid), though growth_metrics ignores it now", async () => {
+    await as("anon", () => q("insert into public.events (name, anon_id) values ('submit_started','v9')"));
+    const m = (await as("admin", () => q("select public.growth_metrics() as m"))).rows[0].m as { funnel: Record<string, number> };
+    expect(m.funnel.form_view).toBe(1); // unaffected: 'v9' isn't counted as a form_view
+  });
+
+  it("rejects a genuinely unknown event name", async () => {
+    await expect(
+      as("anon", () => q("insert into public.events (name, anon_id) values ('bogus_event','v9')")),
+    ).rejects.toThrow(/check constraint/i);
   });
 
   it("public_stats returns counts only", async () => {

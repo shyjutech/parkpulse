@@ -51,3 +51,31 @@ it("upgrades a database that already has Phase 1 data", async () => {
   await db.exec("reset role");
   expect(pub.rows).toEqual([{ role: "Legacy Dev" }]);
 });
+
+it("reclassifies historical submit_started events to form_view on upgrade", async () => {
+  const db = new PGlite({ extensions: { pg_trgm } });
+  const dir = path.join(__dirname, "../../supabase/migrations");
+  const files = fs.readdirSync(dir).sort();
+  await db.exec(fs.readFileSync(path.join(__dirname, "stub_supabase.sql"), "utf8"));
+  // Apply every migration up to (but not including) the one that retires submit_started.
+  const cutover = files.findIndex((f) => f.includes("submit_funnel_events"));
+  expect(cutover).toBeGreaterThan(0);
+  for (const f of files.slice(0, cutover)) await db.exec(fs.readFileSync(path.join(dir, f), "utf8"));
+
+  await db.exec("set role anon");
+  await db.query("insert into public.events (name, anon_id) values ('submit_started', 'legacy-visitor')");
+  await db.exec("reset role");
+
+  for (const f of files.slice(cutover)) await db.exec(fs.readFileSync(path.join(dir, f), "utf8"));
+
+  // The historical row is relabelled to what it actually measured.
+  const rows = await db.query("select name from public.events where anon_id = 'legacy-visitor'");
+  expect(rows.rows).toEqual([{ name: "form_view" }]);
+
+  // The name stays valid at the DB level (so old/replayed rows never break),
+  // even though nothing in the app emits it going forward — that's enforced
+  // one layer up, by the API route's allowlist (see route.test.ts).
+  await db.exec("set role anon");
+  await db.query("insert into public.events (name, anon_id) values ('submit_started', 'new-visitor')");
+  await db.exec("reset role");
+});

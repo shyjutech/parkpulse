@@ -31,16 +31,25 @@ interface Reviewed {
   companies: { name: string } | null;
 }
 
+interface Funnel {
+  visitors: number;
+  form_view: number;
+  form_start: number;
+  signin_prompted: number;
+  signin_returned: number;
+  submit_completed: number;
+}
+
 interface Growth {
   visitors: number;
   return_visitors: number;
-  form_starts: number;
   submissions: number;
   saves: number;
   follows: number;
   checklists: number;
   requests: number;
   by_source: { source: string; visitors: number; submissions: number }[];
+  funnel: Funnel;
 }
 
 interface Requested {
@@ -130,7 +139,6 @@ export default async function AdminPage() {
             {[
               ["Visitors", growth.visitors],
               ["Return visitors", growth.return_visitors],
-              ["Form starts", growth.form_starts],
               ["Submissions", growth.submissions],
               ["Saves", growth.saves],
               ["Follows", growth.follows],
@@ -143,6 +151,33 @@ export default async function AdminPage() {
               </div>
             ))}
           </dl>
+
+          <h3 className="mt-6 text-sm font-semibold text-stone-700">Submission funnel</h3>
+          <p className="mt-1 text-xs text-stone-500">
+            Unique visitors reaching each stage, as a share of total visitors. &ldquo;Sign-in prompted/returned&rdquo;
+            only applies to visitors who weren&apos;t already signed in.
+          </p>
+          <ol className="mt-2 max-w-md divide-y divide-stone-200 rounded-lg border border-stone-200 bg-white">
+            {(
+              [
+                ["Visited", growth.funnel.visitors],
+                ["Viewed the form", growth.funnel.form_view],
+                ["Started filling it in", growth.funnel.form_start],
+                ["Prompted to sign in", growth.funnel.signin_prompted],
+                ["Returned after signing in", growth.funnel.signin_returned],
+                ["Submitted", growth.funnel.submit_completed],
+              ] as const
+            ).map(([label, value]) => (
+              <li key={label} className="flex items-center justify-between gap-3 p-3 text-sm">
+                <span>{label}</span>
+                <span className="flex items-center gap-2">
+                  <span className="font-semibold">{value}</span>
+                  <span className="w-10 text-right text-xs text-stone-500">{pct(value, growth.funnel.visitors)}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
+
           {growth.by_source.length > 0 && (
             <table className="mt-4 w-full max-w-md text-left text-sm">
               <caption className="mb-1 text-left text-xs text-stone-500">By traffic source (UTM)</caption>

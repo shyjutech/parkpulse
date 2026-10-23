@@ -1,5 +1,5 @@
+import FormViewTracker from "@/components/FormViewTracker";
 import SubmitForm from "@/components/SubmitForm";
-import TrackEvent from "@/components/TrackEvent";
 import { MODERATION_NOTE, PRIVACY_SUMMARY } from "@/lib/constants";
 import { getViewer } from "@/lib/session";
 import { createClient } from "@/lib/supabase/server";
@@ -19,7 +19,7 @@ export default async function SubmitPage({ searchParams }: PageProps<"/submit">)
 
   return (
     <div className="mx-auto max-w-2xl">
-      <TrackEvent name="submit_started" />
+      <FormViewTracker />
       <h1 className="text-2xl font-semibold">Share your interview experience</h1>
       <p className="mt-2 text-stone-600">
         Takes about 2 minutes. You don&apos;t need to sign in until the last step, and you can add as little or as much as you like.
