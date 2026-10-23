@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { MAX_ANSWER_CHARS, MAX_SKILLS_CHARS, maxQuestions } from "@/lib/interview/constants";
-import { FALLBACK_FEEDBACK, parseFeedback } from "@/lib/interview/feedback";
+import { parseFeedback } from "@/lib/interview/feedback";
 import { planNextTurn, type GroundingQuestion } from "@/lib/interview/grounding";
 import {
   InterviewConfigError,
@@ -62,6 +62,12 @@ export async function POST(request: Request) {
   const supabase = await createClient();
   const { data: auth } = await supabase.auth.getUser();
   if (!auth.user) return fail("Please sign in.", 401);
+
+  // If this session (or any other of theirs) has gone stale since they were
+  // last here, this is what actually enforces the timeout — not a scheduled
+  // job. If it just got marked abandoned, the fetch below correctly sees
+  // status != 'active' and the caller gets "This interview isn't active."
+  await supabase.rpc("abandon_stale_sessions", { p_user: auth.user.id });
 
   // RLS already scopes this to the caller's own rows, so finding nothing
   // means either it doesn't exist or it isn't theirs — same response either way.
@@ -126,7 +132,11 @@ export async function POST(request: Request) {
         p_model: completion.model,
       });
     }
-    const feedback = completion ? parseFeedback(completion.content) : FALLBACK_FEEDBACK;
+    // null (not a watered-down Feedback object) when the provider call failed
+    // or its output couldn't be validated — the client renders a distinct
+    // "feedback wasn't available" state for that, never something that reads
+    // like a real (if thin) assessment.
+    const feedback = completion ? parseFeedback(completion.content) : null;
     const { error: completeErr } = await supabase.rpc("complete_ai_session", { p_session_id: sessionId });
     if (completeErr) return fail("Couldn't finish the interview right now. Please try again.", 500);
     return NextResponse.json({ ok: true, done: true, feedback });

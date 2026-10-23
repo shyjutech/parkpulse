@@ -1,7 +1,8 @@
 -- AI interview turns (Phase 3 of the AI-interview prompt). The chat itself
--- happens in the app, talking to OpenRouter directly; no transcript text is
--- ever written here. These three functions are the only way a session's
--- state (message_count, token totals, status) can change after creation.
+-- happens in the app, talking to an OpenAI-compatible provider directly; no
+-- transcript text is ever written here. These functions are the only way a
+-- session's state (message_count, token totals, status) can change after
+-- creation.
 
 -- Records one turn's usage and advances the question count. Owner + active
 -- checks are inline (only 3 such functions; a shared helper isn't worth it).

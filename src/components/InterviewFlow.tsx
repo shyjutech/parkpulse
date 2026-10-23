@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { startInterview } from "@/app/interview/actions";
 import { EXPERIENCE_LEVELS } from "@/lib/constants";
 import type { Feedback } from "@/lib/interview/feedback";
@@ -28,7 +28,7 @@ interface TurnResponse {
   source?: "reported" | "generic";
   questionNumber?: number;
   totalQuestions?: number;
-  feedback?: Feedback;
+  feedback?: Feedback | null;
   message?: string;
   creditRestored?: boolean;
 }
@@ -62,6 +62,19 @@ export default function InterviewFlow({ companies }: { companies: Company[] }) {
   const [pendingAnswer, setPendingAnswer] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
+
+  // Warn before a refresh, tab close, or navigation away loses an
+  // in-progress interview. Only while a session is actually open — nothing
+  // to lose during setup, and nothing left to lose once it's done/blocked.
+  useEffect(() => {
+    if (phase !== "chatting" && phase !== "loading") return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [phase]);
 
   function requestTurn(sid: string, answerToSend: string | undefined, priorMessages: Message[]) {
     setPhase("loading");
@@ -135,31 +148,45 @@ export default function InterviewFlow({ companies }: { companies: Company[] }) {
     );
   }
 
-  if (phase === "done" && feedback) {
+  if (phase === "done") {
     return (
       <div className="mt-6 space-y-5">
         <div className="rounded-lg border border-brand-600/30 bg-brand-50 p-5">
           <h2 className="font-semibold text-brand-800">Interview complete</h2>
-          <p className="mt-1 text-sm text-stone-700">Here&apos;s some practice feedback. It&apos;s AI-generated and can be wrong — use it as a starting point, not a verdict.</p>
+          <p className="mt-1 text-sm text-stone-700">You answered every question. Nice work.</p>
         </div>
-        <section>
-          <h3 className="text-sm font-semibold uppercase text-stone-500">What went well</h3>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-stone-800">
-            {feedback.strengths.map((s, i) => <li key={i}>{s}</li>)}
-          </ul>
-        </section>
-        <section>
-          <h3 className="text-sm font-semibold uppercase text-stone-500">Room to improve</h3>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-stone-800">
-            {feedback.gaps.map((s, i) => <li key={i}>{s}</li>)}
-          </ul>
-        </section>
-        <section>
-          <h3 className="text-sm font-semibold uppercase text-stone-500">Tips for next time</h3>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-stone-800">
-            {feedback.tips.map((s, i) => <li key={i}>{s}</li>)}
-          </ul>
-        </section>
+
+        {feedback ? (
+          <>
+            <p className="text-sm text-stone-600">This feedback is AI-generated and can be wrong — use it as a starting point, not a verdict.</p>
+            <section>
+              <h3 className="text-sm font-semibold uppercase text-stone-500">What went well</h3>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-stone-800">
+                {feedback.strengths.map((s, i) => <li key={i}>{s}</li>)}
+              </ul>
+            </section>
+            <section>
+              <h3 className="text-sm font-semibold uppercase text-stone-500">Room to improve</h3>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-stone-800">
+                {feedback.gaps.map((s, i) => <li key={i}>{s}</li>)}
+              </ul>
+            </section>
+            <section>
+              <h3 className="text-sm font-semibold uppercase text-stone-500">Tips for next time</h3>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-stone-800">
+                {feedback.tips.map((s, i) => <li key={i}>{s}</li>)}
+              </ul>
+            </section>
+          </>
+        ) : (
+          <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+            <p className="font-medium text-amber-900">Automated feedback wasn&apos;t available</p>
+            <p className="mt-1 text-sm text-amber-900">
+              This is not an assessment of your answers — we simply couldn&apos;t generate feedback for this session. You still completed the full practice interview.
+            </p>
+          </div>
+        )}
+
         <a href="/dashboard" className="inline-flex min-h-11 items-center rounded-md border border-stone-300 bg-white px-4 text-sm font-medium hover:border-brand-600">
           Back to My space
         </a>

@@ -124,3 +124,51 @@ it("does not retroactively grant credits for pre-existing approvals, but the bac
   );
   expect(after.rows[0].n).toBe(1);
 });
+
+it("backfills last_activity_at for sessions that existed before the abandonment migration", async () => {
+  const db = new PGlite({ extensions: { pg_trgm } });
+  const dir = path.join(__dirname, "../../supabase/migrations");
+  const files = fs.readdirSync(dir).sort();
+  const cutover = files.findIndex((f) => f.includes("ai_interview_abandonment"));
+  expect(cutover).toBeGreaterThan(0);
+
+  await db.exec(fs.readFileSync(path.join(__dirname, "stub_supabase.sql"), "utf8"));
+  for (const f of files.slice(0, cutover)) await db.exec(fs.readFileSync(path.join(dir, f), "utf8"));
+
+  const u = "00000000-0000-0000-0000-0000000000c1";
+  await db.query("insert into auth.users (id, email) values ($1, 'preexisting-session@example.com')", [u]);
+  const c = await db.query<{ id: string }>(
+    "insert into public.companies (name, normalized_name, slug, park) values ('Pre Interview Co','pre interview co','pre-interview-co','Infopark') returning id",
+  );
+  await db.query(
+    `insert into public.submissions (user_id, company_id, role, experience_level, interview_date, questions, status)
+     values ($1, $2, 'Legacy Interviewer', '0–2 years', '2026-01-01', 'What was asked?', 'approved')`,
+    [u, c.rows[0].id],
+  );
+  // Inserted directly (as the superuser connection, bypassing the grants that
+  // normally require going through start_ai_interview), simulating a row
+  // that already existed in the table before this migration -- the point
+  // being tested is the migration's backfill, not the insert path.
+  const session = await db.query<{ id: string }>(
+    "insert into public.ai_interview_sessions (user_id, role, experience_level) values ($1, 'Dev', 'Fresher') returning id",
+    [u],
+  );
+
+  for (const f of files.slice(cutover)) await db.exec(fs.readFileSync(path.join(dir, f), "utf8"));
+
+  const row = await db.query<{ has_last_activity: boolean }>(
+    "select last_activity_at is not null as has_last_activity from public.ai_interview_sessions where id = $1",
+    [session.rows[0].id],
+  );
+  expect(row.rows[0].has_last_activity).toBe(true);
+
+  // And the new sweep function works against this now-upgraded row.
+  await db.query("update public.ai_interview_sessions set last_activity_at = now() - interval '999 minutes' where id = $1", [session.rows[0].id]);
+  await db.query(
+    "select set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-0000000000c1\",\"email\":\"preexisting-session@example.com\"}', false)",
+  );
+  await db.exec("set role authenticated");
+  const swept = await db.query<{ n: number }>("select public.abandon_stale_sessions($1) as n", [u]);
+  await db.exec("reset role");
+  expect(Number(swept.rows[0].n)).toBe(1);
+});

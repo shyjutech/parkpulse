@@ -849,3 +849,122 @@ describe("AI interview turns", () => {
     await expect(as("anon", () => q("select public.fail_ai_session($1)", ["00000000-0000-0000-0000-000000000000"]))).rejects.toThrow(/permission denied/i);
   });
 });
+
+describe("abandoned AI interview sessions", () => {
+  const janeActor = "jane" as Actor;
+  const kyleActor = "kyle" as Actor;
+  let janeId: string;
+  let kyleId: string;
+
+  beforeAll(async () => {
+    janeId = "00000000-0000-0000-0000-0000000000b4";
+    kyleId = "00000000-0000-0000-0000-0000000000b5";
+    ids["jane" as keyof typeof ids] = janeId;
+    ids["kyle" as keyof typeof ids] = kyleId;
+    emails.jane = "jane@example.com";
+    emails.kyle = "kyle@example.com";
+    await q("insert into auth.users (id, email) values ($1, 'jane@example.com'), ($2, 'kyle@example.com')", [janeId, kyleId]);
+  });
+
+  async function freshSession(role: string, actor: Actor, userId: string) {
+    await insertSubmission(actor, { user_id: userId, role });
+    const row = await q("select id from public.submissions where role = $1", [role]);
+    await as("admin", () => q("select public.moderate_submission($1, 'approved')", [row.rows[0].id]));
+    const r = await as(actor, () => q("select public.start_ai_interview('Dev', 'Fresher') as id"));
+    const sessionId = r.rows[0].id as string;
+    await q("update public.ai_interview_sessions set created_at = now() - interval '1 day' where id = $1", [sessionId]);
+    return sessionId;
+  }
+
+  async function backdateActivity(sessionId: string, minutesAgo: number) {
+    await q("update public.ai_interview_sessions set last_activity_at = now() - ($2 || ' minutes')::interval where id = $1", [sessionId, minutesAgo]);
+  }
+
+  it("a stale session with fewer than 2 answers is abandoned and its credit restored", async () => {
+    const sessionId = await freshSession("Abandon Test A", janeActor, janeId);
+    await as(janeActor, () => q("select public.record_ai_turn($1, 10, 10, 'x')", [sessionId])); // 1 question asked, 0 answers recorded yet
+    await backdateActivity(sessionId, 999);
+
+    const n = await as(janeActor, () => q("select public.abandon_stale_sessions($1) as n", [janeId]));
+    expect(Number(n.rows[0].n)).toBe(1);
+
+    const session = await q("select status, completed_at is not null as has_completed_at from public.ai_interview_sessions where id = $1", [sessionId]);
+    expect(session.rows[0]).toEqual({ status: "abandoned", has_completed_at: true });
+    const credit = await q("select consumed_at, session_id from public.interview_credits where id = (select id from public.interview_credits where user_id = $1 order by granted_at desc limit 1)", [janeId]);
+    expect(credit.rows[0]).toEqual({ consumed_at: null, session_id: null });
+  });
+
+  it("a stale session with 2 or more answers is abandoned but its credit is NOT restored", async () => {
+    const sessionId = await freshSession("Abandon Test B", janeActor, janeId);
+    await as(janeActor, () => q("select public.record_ai_turn($1, 10, 10, 'x')", [sessionId]));
+    await as(janeActor, () => q("select public.record_ai_turn($1, 10, 10, 'x')", [sessionId])); // message_count = 2
+    await backdateActivity(sessionId, 999);
+
+    await as(janeActor, () => q("select public.abandon_stale_sessions($1)", [janeId]));
+    const session = await q("select status from public.ai_interview_sessions where id = $1", [sessionId]);
+    expect(session.rows[0].status).toBe("abandoned");
+    const credit = await q("select consumed_at from public.interview_credits where session_id = $1", [sessionId]);
+    expect(credit.rows[0].consumed_at).not.toBeNull(); // unchanged — not restored
+  });
+
+  it("a session with recent activity is left untouched", async () => {
+    const sessionId = await freshSession("Abandon Test C", janeActor, janeId);
+    // last_activity_at defaults to now() — nothing to backdate.
+    const n = await as(janeActor, () => q("select public.abandon_stale_sessions($1) as n", [janeId]));
+    expect(Number(n.rows[0].n)).toBe(0);
+    const session = await q("select status from public.ai_interview_sessions where id = $1", [sessionId]);
+    expect(session.rows[0].status).toBe("active");
+  });
+
+  it("a non-admin cannot sweep another user's sessions, but can sweep their own; only an admin can sweep everyone", async () => {
+    const sessionId = await freshSession("Abandon Test D", kyleActor, kyleId);
+    await backdateActivity(sessionId, 999);
+
+    await expect(as(janeActor, () => q("select public.abandon_stale_sessions($1)", [kyleId]))).rejects.toThrow(/not authorized/);
+    await expect(as(janeActor, () => q("select public.abandon_stale_sessions()"))).rejects.toThrow(/admin only/);
+    await expect(as("anon", () => q("select public.abandon_stale_sessions($1)", [kyleId]))).rejects.toThrow(/permission denied/i);
+
+    const kyleResult = await as(kyleActor, () => q("select public.abandon_stale_sessions($1) as n", [kyleId]));
+    expect(Number(kyleResult.rows[0].n)).toBe(1);
+  });
+
+  it("admin can sweep every stale session regardless of owner", async () => {
+    const sessionId = await freshSession("Abandon Test E", kyleActor, kyleId);
+    await backdateActivity(sessionId, 999);
+    const n = await as("admin", () => q("select public.abandon_stale_sessions() as n", []));
+    expect(Number(n.rows[0].n)).toBeGreaterThanOrEqual(1);
+    const session = await q("select status from public.ai_interview_sessions where id = $1", [sessionId]);
+    expect(session.rows[0].status).toBe("abandoned");
+  });
+
+  it("start_ai_interview self-heals: a stale, under-answered session is abandoned (and its credit reused) automatically on the next call", async () => {
+    const sessionId = await freshSession("Abandon Test F", kyleActor, kyleId);
+    await backdateActivity(sessionId, 999);
+
+    // Kyle is already out of fresh credits (3 lifetime, all used by tests D/E/F) —
+    // this call can only succeed by reclaiming F's own stale, unanswered credit.
+    const r = await as(kyleActor, () => q("select public.start_ai_interview('Dev', 'Fresher') as id"));
+    expect(r.rows[0].id).toBeTruthy();
+    expect(r.rows[0].id).not.toBe(sessionId);
+
+    const oldSession = await q("select status from public.ai_interview_sessions where id = $1", [sessionId]);
+    expect(oldSession.rows[0].status).toBe("abandoned");
+  });
+
+  it("record_ai_turn and add_ai_session_tokens both bump last_activity_at", async () => {
+    const sessionId = await freshSession("Abandon Test G", janeActor, janeId);
+    const lastActivity = async () => {
+      const r = await q("select last_activity_at from public.ai_interview_sessions where id = $1", [sessionId]);
+      return new Date(r.rows[0].last_activity_at as string).getTime();
+    };
+    const before = await lastActivity();
+    await q("update public.ai_interview_sessions set last_activity_at = now() - interval '5 minutes' where id = $1", [sessionId]);
+
+    await as(janeActor, () => q("select public.record_ai_turn($1, 1, 1, 'x')", [sessionId]));
+    expect(await lastActivity()).toBeGreaterThan(before);
+
+    await q("update public.ai_interview_sessions set last_activity_at = now() - interval '5 minutes' where id = $1", [sessionId]);
+    await as(janeActor, () => q("select public.add_ai_session_tokens($1, 1, 1, 'x')", [sessionId]));
+    expect(await lastActivity()).toBeGreaterThan(before);
+  });
+});
