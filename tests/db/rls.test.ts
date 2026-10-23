@@ -723,3 +723,129 @@ describe("backfill_legacy_credits", () => {
     expect(georgeCreditsAgain.rows[0].n).toBe(1);
   });
 });
+
+describe("AI interview turns", () => {
+  const henryActor = "henry" as Actor;
+  const irisActor = "iris" as Actor;
+  let henryId: string;
+  let irisId: string;
+
+  beforeAll(async () => {
+    henryId = "00000000-0000-0000-0000-0000000000a2";
+    irisId = "00000000-0000-0000-0000-0000000000a3";
+    ids["henry" as keyof typeof ids] = henryId;
+    ids["iris" as keyof typeof ids] = irisId;
+    emails.henry = "henry@example.com";
+    emails.iris = "iris@example.com";
+    await q("insert into auth.users (id, email) values ($1, 'henry@example.com'), ($2, 'iris@example.com')", [henryId, irisId]);
+  });
+
+  // Each run through here consumes one of the actor's 3 lifetime credits, so
+  // tests A-C (which use Henry) and D-E (which use Iris, a second user) stay
+  // within that cap rather than running one user out partway through.
+  async function freshActiveSession(role: string, actor: Actor = henryActor, userId = henryId) {
+    await insertSubmission(actor, { user_id: userId, role });
+    const row = await q("select id from public.submissions where role = $1", [role]);
+    await as("admin", () => q("select public.moderate_submission($1, 'approved')", [row.rows[0].id]));
+    const r = await as(actor, () => q("select public.start_ai_interview('Dev', 'Fresher') as id"));
+    const sessionId = r.rows[0].id as string;
+    // Backdate so later freshActiveSession calls for the same user in this
+    // file aren't blocked by the 2/day session limit.
+    await q("update public.ai_interview_sessions set created_at = now() - interval '1 day' where id = $1", [sessionId]);
+    return sessionId;
+  }
+
+  it("record_ai_turn increments the count and adds token usage, owner-only and active-only", async () => {
+    const sessionId = await freshActiveSession("Turn Test A");
+
+    const r1 = await as(henryActor, () => q("select public.record_ai_turn($1, 120, 80, 'test-model') as n", [sessionId]));
+    expect(r1.rows[0].n).toBe(1);
+    const r2 = await as(henryActor, () => q("select public.record_ai_turn($1, 50, 30, 'test-model') as n", [sessionId]));
+    expect(r2.rows[0].n).toBe(2);
+
+    const row = await q(
+      "select message_count, input_tokens, output_tokens, model from public.ai_interview_sessions where id = $1",
+      [sessionId],
+    );
+    expect(row.rows[0]).toEqual({ message_count: 2, input_tokens: 170, output_tokens: 110, model: "test-model" });
+
+    // Another user cannot record a turn on Henry's session.
+    await expect(as("bob", () => q("select public.record_ai_turn($1, 1, 1, 'x')", [sessionId]))).rejects.toThrow(/not found or not active/);
+
+    await as(henryActor, () => q("select public.complete_ai_session($1)", [sessionId]));
+    await expect(as(henryActor, () => q("select public.record_ai_turn($1, 1, 1, 'x')", [sessionId]))).rejects.toThrow(/not found or not active/);
+  });
+
+  it("add_ai_session_tokens adds usage without advancing the question count, owner-only and active-only", async () => {
+    const sessionId = await freshActiveSession("Turn Test F", irisActor, irisId);
+    await as(irisActor, () => q("select public.add_ai_session_tokens($1, 200, 150, 'feedback-model')", [sessionId]));
+    const row = await q(
+      "select message_count, input_tokens, output_tokens, model from public.ai_interview_sessions where id = $1",
+      [sessionId],
+    );
+    expect(row.rows[0]).toEqual({ message_count: 0, input_tokens: 200, output_tokens: 150, model: "feedback-model" });
+
+    await expect(as("bob", () => q("select public.add_ai_session_tokens($1, 1, 1, 'x')", [sessionId]))).rejects.toThrow(/not found or not active/);
+
+    await as(irisActor, () => q("select public.complete_ai_session($1)", [sessionId]));
+    await expect(as(irisActor, () => q("select public.add_ai_session_tokens($1, 1, 1, 'x')", [sessionId]))).rejects.toThrow(/not found or not active/);
+  });
+
+  it("complete_ai_session transitions active -> completed, owner-only, and only from active", async () => {
+    const sessionId = await freshActiveSession("Turn Test B");
+    await expect(as("bob", () => q("select public.complete_ai_session($1)", [sessionId]))).rejects.toThrow(/not found or not active/);
+
+    await as(henryActor, () => q("select public.complete_ai_session($1)", [sessionId]));
+    const row = await q("select status, completed_at is not null as has_completed_at from public.ai_interview_sessions where id = $1", [sessionId]);
+    expect(row.rows[0]).toEqual({ status: "completed", has_completed_at: true });
+
+    await expect(as(henryActor, () => q("select public.complete_ai_session($1)", [sessionId]))).rejects.toThrow(/not found or not active/);
+  });
+
+  it("fail_ai_session marks the session failed and restores its credit for reuse", async () => {
+    const sessionId = await freshActiveSession("Turn Test C");
+    const before = await q("select consumed_at, session_id from public.interview_credits where session_id = $1", [sessionId]);
+    expect(before.rows[0].consumed_at).not.toBeNull();
+
+    const result = await as(henryActor, () => q("select public.fail_ai_session($1) as ok", [sessionId]));
+    expect(result.rows[0].ok).toBe(true);
+
+    const session = await q("select status, completed_at is not null as has_completed_at from public.ai_interview_sessions where id = $1", [sessionId]);
+    expect(session.rows[0]).toEqual({ status: "failed", has_completed_at: true });
+
+    const credit = await q("select consumed_at, session_id from public.interview_credits where id = (select id from public.interview_credits where user_id = $1 order by granted_at desc limit 1)", [henryId]);
+    expect(credit.rows[0]).toEqual({ consumed_at: null, session_id: null });
+
+    // Restored credit is genuinely spendable again.
+    const again = await as(henryActor, () => q("select public.start_ai_interview('Dev', 'Fresher') as id"));
+    expect(again.rows[0].id).toBeTruthy();
+  });
+
+  it("fail_ai_session is a no-op (returns false, no double refund) once a session is no longer active, and is owner-scoped", async () => {
+    const sessionId = await freshActiveSession("Turn Test D", irisActor, irisId);
+    await as(irisActor, () => q("select public.complete_ai_session($1)", [sessionId]));
+
+    const creditBefore = await q("select consumed_at from public.interview_credits where session_id = $1", [sessionId]);
+    expect(creditBefore.rows[0].consumed_at).not.toBeNull();
+
+    const result = await as(irisActor, () => q("select public.fail_ai_session($1) as ok", [sessionId]));
+    expect(result.rows[0].ok).toBe(false);
+
+    const creditAfter = await q("select consumed_at from public.interview_credits where session_id = $1", [sessionId]);
+    expect(creditAfter.rows[0].consumed_at).not.toBeNull(); // unchanged -- not double-refunded
+
+    // A different user calling fail_ai_session on Iris's (still-active) session cannot affect it.
+    const another = await freshActiveSession("Turn Test E", irisActor, irisId);
+    const bobResult = await as("bob", () => q("select public.fail_ai_session($1) as ok", [another]));
+    expect(bobResult.rows[0].ok).toBe(false);
+    const stillActive = await q("select status from public.ai_interview_sessions where id = $1", [another]);
+    expect(stillActive.rows[0].status).toBe("active");
+  });
+
+  it("all four functions require authentication", async () => {
+    await expect(as("anon", () => q("select public.record_ai_turn($1, 1, 1, 'x')", ["00000000-0000-0000-0000-000000000000"]))).rejects.toThrow(/permission denied/i);
+    await expect(as("anon", () => q("select public.add_ai_session_tokens($1, 1, 1, 'x')", ["00000000-0000-0000-0000-000000000000"]))).rejects.toThrow(/permission denied/i);
+    await expect(as("anon", () => q("select public.complete_ai_session($1)", ["00000000-0000-0000-0000-000000000000"]))).rejects.toThrow(/permission denied/i);
+    await expect(as("anon", () => q("select public.fail_ai_session($1)", ["00000000-0000-0000-0000-000000000000"]))).rejects.toThrow(/permission denied/i);
+  });
+});

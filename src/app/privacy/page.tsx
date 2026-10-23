@@ -31,6 +31,17 @@ export default function PrivacyPage() {
 
       <h2 className={h}>Your private features</h2>
       <p className={p}>Saved reports, followed companies and preparation checklists are visible only to you.</p>
+
+      <h2 className={h}>AI mock interview</h2>
+      <p className={p}>
+        If you use the AI mock interview, the role, experience level, company (if chosen), anything you type as &ldquo;skills you want to be asked about,&rdquo; and your answers during that session are sent to a third-party AI provider (via OpenRouter) to generate questions and feedback. We don&apos;t collect or request a résumé.
+      </p>
+      <p className={p}>
+        The conversation itself isn&apos;t stored on our servers once your session ends — only non-content metadata is kept (how many questions were asked, token usage, timestamps), so we can track usage and cost. It is never linked to your anonymous reports.
+      </p>
+      <p className={p}>
+        The feedback you receive is AI-generated, for practice only, and can be wrong or inaccurate. It is not a hiring decision and not a statement of fact about any company.
+      </p>
     </div>
   );
 }
