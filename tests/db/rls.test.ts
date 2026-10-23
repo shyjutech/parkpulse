@@ -968,3 +968,65 @@ describe("abandoned AI interview sessions", () => {
     expect(await lastActivity()).toBeGreaterThan(before);
   });
 });
+
+describe("deleting a submission never silently reduces the credit ledger", () => {
+  const lenaActor = "lena" as Actor;
+  const mayaActor = "maya" as Actor;
+  let lenaId: string;
+  let mayaId: string;
+
+  beforeAll(async () => {
+    lenaId = "00000000-0000-0000-0000-0000000000d1";
+    mayaId = "00000000-0000-0000-0000-0000000000d2";
+    ids["lena" as keyof typeof ids] = lenaId;
+    ids["maya" as keyof typeof ids] = mayaId;
+    emails.lena = "lena@example.com";
+    emails.maya = "maya@example.com";
+    await q("insert into auth.users (id, email) values ($1, 'lena@example.com'), ($2, 'maya@example.com')", [lenaId, mayaId]);
+  });
+
+  async function approvedSubmission(role: string, actor: Actor = lenaActor, userId: string = lenaId) {
+    await insertSubmission(actor, { user_id: userId, role });
+    const row = await q("select id from public.submissions where role = $1", [role]);
+    const subId = row.rows[0].id as string;
+    await as("admin", () => q("select public.moderate_submission($1, 'approved')", [subId]));
+    return subId;
+  }
+
+  it("a CONSUMED credit survives deleting the submission that earned it — no dangling FK, no cap undercount", async () => {
+    const subId = await approvedSubmission("FK Fix Consumed");
+    const session = await as(lenaActor, () => q("select public.start_ai_interview('Dev', 'Fresher') as id"));
+    const sessionId = session.rows[0].id as string;
+
+    await as("admin", () => q("delete from public.submissions where id = $1", [subId]));
+
+    // The credit row survives, detached rather than gone.
+    const credit = await q(
+      "select submission_id, consumed_at is not null as consumed from public.interview_credits where session_id = $1",
+      [sessionId],
+    );
+    expect(credit.rows).toEqual([{ submission_id: null, consumed: true }]);
+    // The session (real usage/cost record) was never at risk — nothing references it.
+    const sessionRow = await q("select id from public.ai_interview_sessions where id = $1", [sessionId]);
+    expect(sessionRow.rows).toHaveLength(1);
+
+    // And the cap still correctly counts this credit: 2 more approvals grant
+    // only 2 more (reaching 3 total), not a 3rd on top of this detached one.
+    for (const role of ["FK Fix B", "FK Fix C"]) await approvedSubmission(role);
+    const total = await q("select count(*)::int as n from public.interview_credits where user_id = $1", [lenaId]);
+    expect(total.rows[0].n).toBe(3);
+  });
+
+  it("an UNCONSUMED credit also survives deletion (now a deliberate admin action to remove, not automatic)", async () => {
+    // A separate, fresh user -- Lena is already at the cap from the previous test.
+    const subId = await approvedSubmission("FK Fix Unconsumed", mayaActor, mayaId);
+    const before = await q("select id from public.interview_credits where submission_id = $1", [subId]);
+    expect(before.rows).toHaveLength(1);
+    const creditId = before.rows[0].id as string;
+
+    await as("admin", () => q("delete from public.submissions where id = $1", [subId]));
+
+    const after = await q("select id, submission_id from public.interview_credits where id = $1", [creditId]);
+    expect(after.rows).toEqual([{ id: creditId, submission_id: null }]);
+  });
+});

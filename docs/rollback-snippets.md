@@ -12,10 +12,41 @@ Apply these in your Supabase SQL editor, in this exact order:
 4. `supabase/migrations/20261024000000_ai_interview_credits.sql`
 5. `supabase/migrations/20261025000000_ai_interview_turns.sql`
 6. `supabase/migrations/20261026000000_ai_interview_abandonment.sql`
+7. `supabase/migrations/20261027000000_credit_submission_fk_fix.sql`
 
 Each is additive and keeps existing rows; see each file's own header comment
 for what it does. Re-running an already-applied migration is not safe (several
 statements, like `add constraint`, aren't idempotent) — apply each exactly once.
+
+## Confirm everything is applied
+
+One query, one row, read left to right in migration order — every column
+should say `true`:
+
+```sql
+select
+  to_regclass('public.profiles') is not null as m1_phase1_init,
+  to_regclass('public.company_requests') is not null as m2_open_browse,
+  exists (
+    select 1 from pg_constraint
+     where conname = 'events_name_check' and pg_get_constraintdef(oid) like '%form_view%'
+  ) as m3_funnel_events,
+  to_regclass('public.interview_credits') is not null as m4_ai_credits,
+  exists (select 1 from pg_proc where proname = 'record_ai_turn') as m5_ai_turns,
+  exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'ai_interview_sessions' and column_name = 'last_activity_at'
+  ) as m6_abandonment,
+  exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'interview_credits'
+       and column_name = 'submission_id' and is_nullable = 'YES'
+  ) as m7_credit_fk_fix;
+```
+
+If any column is `false`, that migration (and everything after it, since each
+builds on the last) hasn't been applied yet — find its number above and run
+it from `supabase/migrations/`.
 
 ## Disable AI interview credit grants
 

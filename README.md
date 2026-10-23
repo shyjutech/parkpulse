@@ -12,7 +12,8 @@ Stack: Next.js (App Router) · TypeScript · Tailwind · Supabase (Auth, Postgre
 2. Run the files in `supabase/migrations/` **in order** in the SQL editor (or `supabase db push`):
    `20260919000000_phase1_init.sql`, `20260921000000_open_browse_engagement.sql`,
    `20261023000000_submit_funnel_events.sql`, `20261024000000_ai_interview_credits.sql`,
-   `20261025000000_ai_interview_turns.sql`, `20261026000000_ai_interview_abandonment.sql`.
+   `20261025000000_ai_interview_turns.sql`, `20261026000000_ai_interview_abandonment.sql`,
+   `20261027000000_credit_submission_fk_fix.sql`.
    The first seeds `public.admins` with the admin email; edit that insert first if the admin should differ.
    Every migration after it is additive and keeps existing rows. See [`docs/rollback-snippets.md`](docs/rollback-snippets.md) if something needs to be undone.
 3. Authentication → Providers → enable **Google** (create OAuth credentials in Google Cloud; the authorised redirect URI is shown in Supabase).

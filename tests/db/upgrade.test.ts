@@ -172,3 +172,45 @@ it("backfills last_activity_at for sessions that existed before the abandonment 
   await db.exec("reset role");
   expect(Number(swept.rows[0].n)).toBe(1);
 });
+
+it("upgrades interview_credits.submission_id to nullable/on-delete-set-null without touching existing rows", async () => {
+  const db = new PGlite({ extensions: { pg_trgm } });
+  const dir = path.join(__dirname, "../../supabase/migrations");
+  const files = fs.readdirSync(dir).sort();
+  const cutover = files.findIndex((f) => f.includes("credit_submission_fk_fix"));
+  expect(cutover).toBeGreaterThan(0);
+
+  await db.exec(fs.readFileSync(path.join(__dirname, "stub_supabase.sql"), "utf8"));
+  for (const f of files.slice(0, cutover)) await db.exec(fs.readFileSync(path.join(dir, f), "utf8"));
+
+  const u = "00000000-0000-0000-0000-0000000000e1";
+  await db.query("insert into auth.users (id, email) values ($1, 'preexisting-credit@example.com')", [u]);
+  const c = await db.query<{ id: string }>(
+    "insert into public.companies (name, normalized_name, slug, park) values ('Pre Credit Co','pre credit co','pre-credit-co','Infopark') returning id",
+  );
+  const sub = await db.query<{ id: string }>(
+    `insert into public.submissions (user_id, company_id, role, experience_level, interview_date, questions, status)
+     values ($1, $2, 'Legacy Credit Role', '0–2 years', '2026-01-01', 'What was asked?', 'approved') returning id`,
+    [u, c.rows[0].id],
+  );
+  // Pre-existing credit row, inserted directly (bypassing the trigger, which
+  // is fine -- the point here is the column/constraint upgrade, not granting).
+  const credit = await db.query<{ id: string }>(
+    "insert into public.interview_credits (user_id, submission_id) values ($1, $2) returning id",
+    [u, sub.rows[0].id],
+  );
+
+  for (const f of files.slice(cutover)) await db.exec(fs.readFileSync(path.join(dir, f), "utf8"));
+
+  // Untouched by the migration itself.
+  const row = await db.query<{ submission_id: string }>("select submission_id from public.interview_credits where id = $1", [credit.rows[0].id]);
+  expect(row.rows[0].submission_id).toBe(sub.rows[0].id);
+
+  // And the new behavior is live: deleting the submission detaches rather than deletes.
+  await db.query("delete from public.submissions where id = $1", [sub.rows[0].id]);
+  const after = await db.query<{ id: string; submission_id: string | null }>(
+    "select id, submission_id from public.interview_credits where id = $1",
+    [credit.rows[0].id],
+  );
+  expect(after.rows).toEqual([{ id: credit.rows[0].id, submission_id: null }]);
+});
