@@ -153,7 +153,7 @@ export default function InterviewFlow({ companies }: { companies: Company[] }) {
       <div className="mt-6 space-y-5">
         <div className="rounded-lg border border-brand-600/30 bg-brand-50 p-5">
           <h2 className="font-semibold text-brand-800">Interview complete</h2>
-          <p className="mt-1 text-sm text-stone-700">You answered every question. Nice work.</p>
+          <p className="mt-1 text-sm text-stone-700">You reached the end of the interview. See the feedback below for how your answers came across.</p>
         </div>
 
         {feedback ? (
