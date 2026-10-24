@@ -115,10 +115,10 @@ export function buildFeedbackMessages(ctx: InterviewContext, transcript: ChatMes
   const system = [
     `You just finished a short mock interview with a candidate practicing for a ${ctx.role} role${company}, at the ${ctx.experienceLevel} level.`,
     "Based only on the conversation below, respond with ONLY a single JSON object (no markdown fences, no prose outside the JSON) with exactly these keys:",
-    '"strengths": an array of 1-3 short strings about what the candidate did well,',
-    '"gaps": an array of 1-3 short strings about what could improve,',
+    '"strengths": an array of 0-3 short strings about what the candidate did well — use an empty array if there genuinely weren\'t any,',
+    '"gaps": an array of 0-3 short strings about what could improve — use an empty array if there genuinely weren\'t any,',
     '"tips": an array of 2-3 short, concrete, actionable tips for next time.',
-    "Be specific to what was actually said. Be encouraging but honest. This is practice feedback, not a hiring decision.",
+    "Be specific to what was actually said. Be encouraging but honest — do not invent a strength or a gap just to fill the array. This is practice feedback, not a hiring decision.",
   ].join("\n");
   return [{ role: "system", content: system }, ...sanitizeTranscript(transcript)];
 }

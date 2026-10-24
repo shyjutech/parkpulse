@@ -1,8 +1,14 @@
 import { z } from "zod";
 
 export const FeedbackSchema = z.object({
-  strengths: z.array(z.string().min(1).max(300)).min(1).max(5),
-  gaps: z.array(z.string().min(1).max(300)).min(1).max(5),
+  // No minimum on strengths/gaps: a candidate who answers "I don't know"
+  // throughout genuinely has zero strengths, and one who answers everything
+  // well genuinely has zero gaps — the model reporting that honestly must
+  // not fail validation and fall back to "feedback wasn't available"
+  // (confirmed live: real model output was `strengths: []` for an
+  // all-"I don't know" transcript, which used to be rejected here).
+  strengths: z.array(z.string().min(1).max(300)).max(5),
+  gaps: z.array(z.string().min(1).max(300)).max(5),
   tips: z.array(z.string().min(1).max(300)).min(2).max(5),
 });
 export type Feedback = z.infer<typeof FeedbackSchema>;

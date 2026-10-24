@@ -198,15 +198,23 @@ export default function InterviewFlow({ companies }: { companies: Company[] }) {
             <p className="text-sm text-stone-600">This feedback is AI-generated and can be wrong — use it as a starting point, not a verdict.</p>
             <section>
               <h3 className="text-sm font-semibold uppercase text-stone-500">What went well</h3>
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-stone-800">
-                {feedback.strengths.map((s, i) => <li key={i}>{s}</li>)}
-              </ul>
+              {feedback.strengths.length > 0 ? (
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-stone-800">
+                  {feedback.strengths.map((s, i) => <li key={i}>{s}</li>)}
+                </ul>
+              ) : (
+                <p className="mt-2 text-sm text-stone-500">Nothing specific stood out this time — that&apos;s okay, use the tips below.</p>
+              )}
             </section>
             <section>
               <h3 className="text-sm font-semibold uppercase text-stone-500">Room to improve</h3>
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-stone-800">
-                {feedback.gaps.map((s, i) => <li key={i}>{s}</li>)}
-              </ul>
+              {feedback.gaps.length > 0 ? (
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-stone-800">
+                  {feedback.gaps.map((s, i) => <li key={i}>{s}</li>)}
+                </ul>
+              ) : (
+                <p className="mt-2 text-sm text-stone-500">No specific gaps called out — nice work.</p>
+              )}
             </section>
             <section>
               <h3 className="text-sm font-semibold uppercase text-stone-500">Tips for next time</h3>
