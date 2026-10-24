@@ -13,6 +13,8 @@ Apply these in your Supabase SQL editor, in this exact order:
 5. `supabase/migrations/20261025000000_ai_interview_turns.sql`
 6. `supabase/migrations/20261026000000_ai_interview_abandonment.sql`
 7. `supabase/migrations/20261027000000_credit_submission_fk_fix.sql`
+8. `supabase/migrations/20261028000000_ai_interview_surface_metrics.sql`
+9. `supabase/migrations/20261029000000_ai_interview_feedback.sql`
 
 Each is additive and keeps existing rows; see each file's own header comment
 for what it does. Re-running an already-applied migration is not safe (several
@@ -41,7 +43,12 @@ select
     select 1 from information_schema.columns
      where table_schema = 'public' and table_name = 'interview_credits'
        and column_name = 'submission_id' and is_nullable = 'YES'
-  ) as m7_credit_fk_fix;
+  ) as m7_credit_fk_fix,
+  exists (
+    select 1 from pg_constraint
+     where conname = 'events_name_check' and pg_get_constraintdef(oid) like '%ai_interview_failed%'
+  ) as m8_surface_metrics,
+  to_regclass('public.ai_interview_feedback') is not null as m9_ai_feedback;
 ```
 
 If any column is `false`, that migration (and everything after it, since each

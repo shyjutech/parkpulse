@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import { startInterview } from "@/app/interview/actions";
+import { startInterview, submitInterviewFeedback } from "@/app/interview/actions";
 import { EXPERIENCE_LEVELS } from "@/lib/constants";
 import type { Feedback } from "@/lib/interview/feedback";
 import { MAX_SKILLS_CHARS } from "@/lib/interview/constants";
@@ -42,6 +42,27 @@ async function postTurn(payload: Record<string, unknown>): Promise<TurnResponse>
   return res.json();
 }
 
+function RatingInput({ value, onChange, disabled }: { value: number; onChange: (n: number) => void; disabled?: boolean }) {
+  return (
+    <div role="radiogroup" aria-label="Rating" className="flex gap-1">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          type="button"
+          role="radio"
+          aria-checked={value === n}
+          aria-label={`${n} star${n > 1 ? "s" : ""}`}
+          disabled={disabled}
+          onClick={() => onChange(n)}
+          className={`min-h-11 min-w-11 text-2xl leading-none ${value >= n ? "text-amber-500" : "text-stone-300"} disabled:cursor-not-allowed disabled:opacity-50`}
+        >
+          ★
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function SourceBadge({ source }: { source?: "reported" | "generic" }) {
   if (!source) return null;
   return source === "reported" ? (
@@ -62,6 +83,9 @@ export default function InterviewFlow({ companies }: { companies: Company[] }) {
   const [pendingAnswer, setPendingAnswer] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [rating, setRating] = useState(0);
+  const [ratingSubmitted, setRatingSubmitted] = useState(false);
+  const [ratingError, setRatingError] = useState<string | null>(null);
 
   // Warn before a refresh, tab close, or navigation away loses an
   // in-progress interview. Only while a session is actually open — nothing
@@ -137,6 +161,19 @@ export default function InterviewFlow({ companies }: { companies: Company[] }) {
     requestTurn(sessionId, pendingAnswer, prior);
   }
 
+  function submitRating() {
+    if (!sessionId || rating < 1) return;
+    setRatingError(null);
+    startTransition(async () => {
+      const res = await submitInterviewFeedback(sessionId, rating);
+      if (!res.ok) {
+        setRatingError(res.message);
+        return;
+      }
+      setRatingSubmitted(true);
+    });
+  }
+
   if (phase === "blocked") {
     return (
       <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-5">
@@ -186,6 +223,28 @@ export default function InterviewFlow({ companies }: { companies: Company[] }) {
             </p>
           </div>
         )}
+
+        <div className="rounded-lg border border-stone-200 bg-white p-4">
+          {ratingSubmitted ? (
+            <p className="text-sm text-stone-700">Thanks for rating this mock interview.</p>
+          ) : (
+            <>
+              <p className="text-sm font-medium text-stone-800">How was this mock interview?</p>
+              <div className="mt-2">
+                <RatingInput value={rating} onChange={setRating} disabled={pending} />
+              </div>
+              {ratingError && <p role="alert" className="mt-2 text-sm text-red-800">{ratingError}</p>}
+              <button
+                type="button"
+                onClick={submitRating}
+                disabled={pending || rating < 1}
+                className="mt-3 min-h-11 rounded-md border border-stone-300 bg-white px-4 text-sm font-medium hover:border-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {pending ? "Submitting…" : "Submit rating"}
+              </button>
+            </>
+          )}
+        </div>
 
         <a href="/dashboard" className="inline-flex min-h-11 items-center rounded-md border border-stone-300 bg-white px-4 text-sm font-medium hover:border-brand-600">
           Back to My space

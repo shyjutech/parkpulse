@@ -3,8 +3,8 @@
 Run this against a real deployment with `AI_API_KEY`, `AI_BASE_URL` and
 `AI_MODEL` set, after you have at least one unconsumed interview credit
 (`select * from interview_credits where user_id = '<you>' and consumed_at is null;`,
-or approve one of your own submissions). `/interview` isn't linked from
-anywhere yet — open it directly.
+or approve one of your own submissions). `/interview` is linked from the
+header ("Mock interview") and the dashboard.
 
 For each item: what to do, and what should happen.
 
@@ -74,6 +74,19 @@ today's interview limit. Please try again tomorrow." — enforced by
 counts sessions created today regardless of how they ended. Confirm in
 `ai_interview_sessions` that exactly 2 rows exist for you with today's
 `created_at`.
+
+## 6. Rating the interview after it's done
+
+Finish an interview, then click a star rating on the completion screen and
+submit it.
+
+**Expect:** "Thanks for rating this mock interview." replaces the rating
+control. Confirm the row exists: `select rating from ai_interview_feedback
+where session_id = '<session id>';`. Click a different star and submit again
+— confirm it updates the same row (still one row for that session) rather
+than erroring or inserting a second one. Signed in as someone else, confirm
+`select public.submit_ai_interview_feedback('<their session id>', 5);`
+fails with "session not found or not completed".
 
 ## Also worth a quick look
 

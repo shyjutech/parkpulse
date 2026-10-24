@@ -1095,3 +1095,93 @@ describe("Phase 4 surface metrics", () => {
     ).rejects.toThrow(/check constraint/i);
   });
 });
+
+describe("AI interview feedback", () => {
+  const oscarActor = "oscar" as Actor;
+  let oscarId: string;
+
+  beforeAll(async () => {
+    oscarId = "00000000-0000-0000-0000-0000000000f4";
+    ids["oscar" as keyof typeof ids] = oscarId;
+    emails.oscar = "oscar@example.com";
+    await q("insert into auth.users (id, email) values ($1, 'oscar@example.com')", [oscarId]);
+  });
+
+  async function completedSession(role: string, actor: Actor, userId: string) {
+    await insertSubmission(actor, { user_id: userId, role });
+    const row = await q("select id from public.submissions where role = $1", [role]);
+    await as("admin", () => q("select public.moderate_submission($1, 'approved')", [row.rows[0].id]));
+    const r = await as(actor, () => q("select public.start_ai_interview('Dev', 'Fresher') as id"));
+    const sessionId = r.rows[0].id as string;
+    // Backdate so later calls for the same user in this file aren't blocked
+    // by the 2/day session limit.
+    await q("update public.ai_interview_sessions set created_at = now() - interval '1 day' where id = $1", [sessionId]);
+    await as(actor, () => q("select public.complete_ai_session($1)", [sessionId]));
+    return sessionId;
+  }
+
+  it("lets the owner submit feedback only for their own completed session, and resubmission updates the same row", async () => {
+    const sessionId = await completedSession("Feedback Test A", oscarActor, oscarId);
+
+    await expect(
+      as("bob", () => q("select public.submit_ai_interview_feedback($1, 4)", [sessionId])),
+    ).rejects.toThrow(/not found or not completed/);
+
+    await as(oscarActor, () => q("select public.submit_ai_interview_feedback($1, 4)", [sessionId]));
+    const first = await q("select rating from public.ai_interview_feedback where session_id = $1", [sessionId]);
+    expect(first.rows[0].rating).toBe(4);
+
+    // Resubmitting (changed their mind) updates the same row, not a second one.
+    await as(oscarActor, () => q("select public.submit_ai_interview_feedback($1, 2)", [sessionId]));
+    const second = await q("select rating from public.ai_interview_feedback where session_id = $1", [sessionId]);
+    expect(second.rows).toHaveLength(1);
+    expect(second.rows[0].rating).toBe(2);
+  });
+
+  it("rejects feedback for a session that isn't completed yet, and rejects an out-of-range rating", async () => {
+    await insertSubmission(oscarActor, { user_id: oscarId, role: "Feedback Test B" });
+    const sub = await q("select id from public.submissions where role = 'Feedback Test B'");
+    await as("admin", () => q("select public.moderate_submission($1, 'approved')", [sub.rows[0].id]));
+    const r = await as(oscarActor, () => q("select public.start_ai_interview('Dev', 'Fresher') as id"));
+    const sessionId = r.rows[0].id as string;
+    await q("update public.ai_interview_sessions set created_at = now() - interval '1 day' where id = $1", [sessionId]);
+
+    await expect(
+      as(oscarActor, () => q("select public.submit_ai_interview_feedback($1, 3)", [sessionId])),
+    ).rejects.toThrow(/not found or not completed/);
+
+    await as(oscarActor, () => q("select public.complete_ai_session($1)", [sessionId]));
+    await expect(
+      as(oscarActor, () => q("select public.submit_ai_interview_feedback($1, 0)", [sessionId])),
+    ).rejects.toThrow(/check constraint/i);
+    await expect(
+      as(oscarActor, () => q("select public.submit_ai_interview_feedback($1, 6)", [sessionId])),
+    ).rejects.toThrow(/check constraint/i);
+  });
+
+  it("requires authentication to submit, and feedback rows are select-own only", async () => {
+    await expect(
+      as("anon", () => q("select public.submit_ai_interview_feedback($1, 3)", ["00000000-0000-0000-0000-000000000000"])),
+    ).rejects.toThrow(/permission denied/i);
+    await expect(as("anon", () => q("select * from public.ai_interview_feedback"))).rejects.toThrow(/permission denied/i);
+
+    const mine = await as(oscarActor, () => q("select count(*)::int as n from public.ai_interview_feedback"));
+    expect(mine.rows[0].n).toBeGreaterThanOrEqual(1);
+    const othersView = await as("bob", () => q("select count(*)::int as n from public.ai_interview_feedback"));
+    expect(othersView.rows[0].n).toBe(0);
+  });
+
+  it("growth_metrics reports feedback_count and avg_feedback_rating, and accepts the new event name", async () => {
+    const before = await as("admin", () => q("select public.growth_metrics() as m"));
+    const ai = (before.rows[0].m as { ai: { feedback_count: number; avg_feedback_rating: number | null } }).ai;
+    expect(ai.feedback_count).toBeGreaterThanOrEqual(1);
+    expect(ai.avg_feedback_rating).not.toBeNull();
+
+    await q("insert into public.events (name, user_id) values ('ai_interview_feedback_submitted', $1)", [oscarId]);
+    const rows = await q(
+      "select count(*)::int as n from public.events where user_id = $1 and name = 'ai_interview_feedback_submitted'",
+      [oscarId],
+    );
+    expect(rows.rows[0].n).toBe(1);
+  });
+});
