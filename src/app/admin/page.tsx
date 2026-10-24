@@ -48,6 +48,8 @@ interface AiMetrics {
   sessions_failed: number;
   sessions_abandoned: number;
   avg_tokens_per_completed_session: number;
+  feedback_count: number;
+  avg_feedback_rating: number | null;
 }
 
 interface Growth {
@@ -218,6 +220,7 @@ export default async function AdminPage() {
               ["Sessions completed", `${growth.ai.sessions_completed} (${pct(growth.ai.sessions_completed, growth.ai.sessions_started)})`],
               ["Sessions failed / abandoned", `${growth.ai.sessions_failed} / ${growth.ai.sessions_abandoned}`],
               ["Avg. tokens per completed session", growth.ai.avg_tokens_per_completed_session],
+              ["Avg. rating / ratings submitted", growth.ai.avg_feedback_rating != null ? `${growth.ai.avg_feedback_rating} / ${growth.ai.feedback_count}` : `– / ${growth.ai.feedback_count}`],
             ].map(([label, value]) => (
               <div key={String(label)} className="rounded-lg border border-stone-200 bg-white p-3">
                 <dt className="text-stone-500">{label}</dt>

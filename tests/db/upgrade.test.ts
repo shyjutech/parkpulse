@@ -256,3 +256,57 @@ it("upgrades growth_metrics to include the 'ai' block and preserves pre-existing
   expect(m.rows[0].m.ai.credits_granted).toBe(1);
   expect(m.rows[0].m.ai.credits_redeemed).toBe(1);
 });
+
+it("adds the ai_interview_feedback table and growth_metrics fields without touching pre-existing AI data", async () => {
+  const db = new PGlite({ extensions: { pg_trgm } });
+  const dir = path.join(__dirname, "../../supabase/migrations");
+  const files = fs.readdirSync(dir).sort();
+  const cutover = files.findIndex((f) => f.includes("ai_interview_feedback"));
+  expect(cutover).toBeGreaterThan(0);
+
+  await db.exec(fs.readFileSync(path.join(__dirname, "stub_supabase.sql"), "utf8"));
+  for (const f of files.slice(0, cutover)) await db.exec(fs.readFileSync(path.join(dir, f), "utf8"));
+
+  const u = "00000000-0000-0000-0000-0000000000f5";
+  await db.query("insert into auth.users (id, email) values ($1, 'pre-feedback@example.com'), ($2, 'admin@shyjutalks.test')", [u, "00000000-0000-0000-0000-0000000000ad"]);
+  const c = await db.query<{ id: string }>(
+    "insert into public.companies (name, normalized_name, slug, park) values ('Pre Feedback Co','pre feedback co','pre-feedback-co','Infopark') returning id",
+  );
+  const sub = await db.query<{ id: string }>(
+    `insert into public.submissions (user_id, company_id, role, experience_level, interview_date, questions, status)
+     values ($1, $2, 'Legacy Feedback Role', '0–2 years', '2026-01-01', 'What was asked?', 'approved') returning id`,
+    [u, c.rows[0].id],
+  );
+  const credit = await db.query<{ id: string }>(
+    "insert into public.interview_credits (user_id, submission_id, consumed_at) values ($1, $2, now()) returning id",
+    [u, sub.rows[0].id],
+  );
+  // A pre-existing completed session, inserted directly for the same reason
+  // as the other upgrade tests: the point is the migration, not the insert path.
+  const session = await db.query<{ id: string }>(
+    "insert into public.ai_interview_sessions (user_id, role, experience_level, status, completed_at) values ($1, 'Dev', 'Fresher', 'completed', now()) returning id",
+    [u],
+  );
+  await db.query("update public.interview_credits set session_id = $1 where id = $2", [session.rows[0].id, credit.rows[0].id]);
+
+  for (const f of files.slice(cutover)) await db.exec(fs.readFileSync(path.join(dir, f), "utf8"));
+
+  // Pre-existing rows untouched.
+  const row = await db.query<{ submission_id: string }>("select submission_id from public.interview_credits where id = $1", [credit.rows[0].id]);
+  expect(row.rows[0].submission_id).toBe(sub.rows[0].id);
+
+  // The owner can now rate that pre-existing completed session.
+  await db.query(`select set_config('request.jwt.claims', '{"sub":"${u}","email":"pre-feedback@example.com"}', false)`);
+  await db.exec("set role authenticated");
+  await db.query("select public.submit_ai_interview_feedback($1, 5)", [session.rows[0].id]);
+  await db.exec("reset role");
+
+  await db.query(
+    "select set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-0000000000ad\",\"email\":\"shyjutalks@gmail.com\"}', false)",
+  );
+  await db.exec("set role authenticated");
+  const m = await db.query<{ m: { ai: { feedback_count: number; avg_feedback_rating: number } } }>("select public.growth_metrics() as m");
+  await db.exec("reset role");
+  expect(m.rows[0].m.ai.feedback_count).toBe(1);
+  expect(Number(m.rows[0].m.ai.avg_feedback_rating)).toBe(5);
+});
