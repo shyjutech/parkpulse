@@ -64,7 +64,7 @@ A free, text-only mock interview, earned by contributing. Env vars (server-only,
 
 **How questions are generated:** deterministic, not model-reported. If the chosen company has approved reports, their real `questions` text is served first, verbatim, with no model call at all. Once those run out (or none exist), questions come from the model, explicitly instructed not to imply they're company-specific. The UI labels each accordingly ("Reported by candidates" / "Generic for this role").
 
-**Where it's surfaced:** My space shows credit status (pending / available / used, up to 3) and a "Start AI interview" button when one is available; the submit-confirmation page mentions it after a submission, unless the author is already at the cap. It is not in the main navigation.
+**Where it's surfaced:** My space shows credit status (pending / available / used, up to 3) and a "Start AI interview" button when one is available; the submit-confirmation page mentions it after a submission, unless the author is already at the cap. The top nav also links to it ("Mock interview" → `/interview`).
 
 See [`docs/manual-test-checklist-interview.md`](docs/manual-test-checklist-interview.md) before relying on a new provider/model, and [`docs/rollback-snippets.md`](docs/rollback-snippets.md) for emergency SQL (disabling credit grants, adjusting or disabling the abandonment sweep, a one-query check that every migration is applied).
 
