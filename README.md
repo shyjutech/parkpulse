@@ -1,6 +1,8 @@
 # ParkPulse
 
-Anonymous salary and interview insights for Kerala's IT ecosystem. **Phase 1**: browse → share one experience → unlock the approved database.
+Anonymous salary and interview insights for Kerala's IT ecosystem: browse approved reports freely, share your own experience, and earn free AI mock interviews for contributing.
+
+New to the codebase (or starting a fresh AI session)? Read [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md) first.
 
 Browsing is open to everyone. Signing in (Google) is needed only to contribute, save, follow and keep a preparation checklist.
 
