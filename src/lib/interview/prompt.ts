@@ -52,9 +52,9 @@ const EXPERIENCE_CALIBRATION: Record<string, string> = {
   Fresher:
     "This candidate has little or no professional experience. Ask about fundamentals and core concepts — syntax, basic language features, and simple problem-solving. It's fine if this is one of their first real interviews.",
   "0–2 years":
-    "This candidate has a little hands-on experience. Ask about fundamentals and how they've started applying them in real, if small, projects — basic language features plus simple debugging or problem-solving.",
+    "This candidate has a little hands-on experience. Ask about one specific, named concept or tool from the role's stack and how it works or when to use it (e.g. \"what's the difference between X and Y\", \"when would you use X\"). Do NOT ask open-ended story questions like \"describe a challenging bug you faced\" — keep each question concrete and answerable in a few sentences.",
   "3–5 years":
-    "This candidate has solid hands-on experience. Ask applied questions — how they've used a concept on a real project, a pitfall they've hit, or how they debugged a real issue. Go beyond textbook definitions.",
+    "This candidate has solid hands-on experience. Ask practical questions about one specific, named concept, tool or common pitfall from the role's stack — how it works, when to choose it over an alternative, or how they'd fix a specific, described problem. Go beyond textbook definitions, but keep each question concrete and answerable in a few sentences. Avoid broad open-ended story questions like \"describe a challenging bug you faced and how you resolved it\".",
   "6–10 years":
     "This candidate is experienced. Ask design and trade-off questions — architecture choices, performance, scaling, and why they picked one approach over another on a system they actually built.",
   "10+ years":
